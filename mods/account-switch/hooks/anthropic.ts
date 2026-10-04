@@ -1,0 +1,191 @@
+import type { HttpInit } from 'claude-code'
+
+import type { LimitView, UsageView } from '../types'
+import type { Messages } from './i18n'
+import type { Credential } from './keychain'
+
+export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+export const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+export const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
+const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+const OAUTH_BETA = 'oauth-2025-04-20'
+/** Refresh this long before the access token expires. */
+const EXPIRY_MARGIN_MS = 5 * 60 * 1000
+
+export class AnthropicError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+    /** The response's `Retry-After` header, when it sent one. */
+    readonly retryAfter?: string,
+  ) {
+    super(message)
+  }
+}
+
+type RawLimit = {
+  kind?: string
+  percent?: number
+  resets_at?: string | null
+  scope?: { model?: { display_name?: string | null } | null } | null
+}
+
+type RawWindow = { utilization?: number | null; resets_at?: string | null } | null
+
+type RawUsage = {
+  limits?: RawLimit[]
+  five_hour?: RawWindow
+  seven_day?: RawWindow
+}
+
+function labelOf(limit: RawLimit): string {
+  if (limit.kind === 'session') return '5h'
+  if (limit.kind === 'weekly_all') return 'wk'
+
+  return limit.scope?.model?.display_name ?? limit.kind ?? '?'
+}
+
+/** Turns the usage endpoint's body into the windows the pane draws. */
+export function parseUsage(body: unknown): LimitView[] {
+  const raw = (body ?? {}) as RawUsage
+  if (Array.isArray(raw.limits) && raw.limits.length > 0) {
+    return raw.limits
+      .filter(limit => typeof limit.percent === 'number')
+      .map(limit => ({ label: labelOf(limit), percent: limit.percent as number, resetsAt: limit.resets_at ?? undefined }))
+  }
+  const windows: [string, RawWindow | undefined][] = [
+    ['5h', raw.five_hour],
+    ['wk', raw.seven_day],
+  ]
+
+  return windows.flatMap(([label, window]) =>
+    typeof window?.utilization === 'number'
+      ? [{ label, percent: window.utilization, resetsAt: window.resets_at ?? undefined }]
+      : [],
+  )
+}
+
+/** The usage request: with a bearer token, or with the session's own credential handle. */
+export function usageInit(auth: { token: string } | { handle: string }): HttpInit {
+  if ('handle' in auth) return { headers: { 'anthropic-beta': OAUTH_BETA }, auth: auth.handle }
+
+  return { headers: { 'anthropic-beta': OAUTH_BETA, Authorization: `Bearer ${auth.token}` } }
+}
+
+export function needsRefresh(credential: Credential, now: number): boolean {
+  return credential.claudeAiOauth.expiresAt - EXPIRY_MARGIN_MS <= now
+}
+
+export function refreshInit(credential: Credential): HttpInit {
+  const oauth = credential.claudeAiOauth
+
+  return {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: oauth.refreshToken,
+      client_id: CLIENT_ID,
+      scope: (oauth.scopes ?? []).join(' '),
+    }),
+  }
+}
+
+/** The credential after a refresh; the server rotates the refresh token, so it must be saved. */
+export function applyRefresh(credential: Credential, responseText: string, now: number): Credential {
+  const body = JSON.parse(responseText) as { access_token?: string; refresh_token?: string; expires_in?: number }
+  if (typeof body.access_token !== 'string' || typeof body.expires_in !== 'number') {
+    throw new AnthropicError('token refresh returned no access token')
+  }
+  const oauth = credential.claudeAiOauth
+
+  return {
+    ...credential,
+    claudeAiOauth: {
+      ...oauth,
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token ?? oauth.refreshToken,
+      expiresAt: now + body.expires_in * 1000,
+    },
+  }
+}
+
+/** Whose a token is, as the profile endpoint answers. */
+export type TokenOwner = {
+  accountUuid: string
+  emailAddress: string
+  organizationUuid?: string
+  organizationName?: string
+}
+
+export function parseProfile(text: string): TokenOwner {
+  const body = JSON.parse(text) as {
+    account?: { uuid?: string; email?: string }
+    organization?: { uuid?: string; name?: string }
+  }
+  if (typeof body.account?.uuid !== 'string' || typeof body.account.email !== 'string') {
+    throw new AnthropicError('profile endpoint named no account')
+  }
+
+  return {
+    accountUuid: body.account.uuid,
+    emailAddress: body.account.email,
+    organizationUuid: body.organization?.uuid,
+    organizationName: body.organization?.name,
+  }
+}
+
+/**
+ * The reading after a failed lookup. A 429 keeps the previous reading as it
+ * was, only marked stale: the next lookup recovers by itself, so it is no
+ * message the person must read. Any other failure is said in words.
+ */
+export function failedReading(previous: UsageView | undefined, error: unknown, now: number, m: Messages): UsageView {
+  const kept = isLookedUp(previous) ? previous : undefined
+  if (error instanceof AnthropicError && error.status === 429) {
+    return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, isStale: true, source: 'lookup' }
+  }
+
+  return { limits: kept?.limits ?? [], fetchedAt: now, error: describeFailure(error, m), source: 'lookup' }
+}
+
+/** Whether a reading came from its own account's lookup, the one source trusted for its figures. */
+export function isLookedUp(reading: UsageView | undefined): reading is UsageView {
+  return reading?.source === 'lookup'
+}
+
+/** The readings that came from lookups; whatever else a store or a session held is dropped. */
+export function lookedUpOnly(readings: unknown): Record<string, UsageView> {
+  if (!readings || typeof readings !== 'object') return {}
+
+  return Object.fromEntries(Object.entries(readings as Record<string, UsageView>).filter(([, reading]) => isLookedUp(reading)))
+}
+
+/** One window as Claude Code's own response reported it. */
+export type MeasuredWindow = { kind: string; percentUsed: number; resetsAt?: string }
+
+/**
+ * The reading after Claude Code's own response reported its windows: the
+ * five-hour and weekly figures replaced, every other window (a model's
+ * weekly limit, which responses do not carry) kept from the last lookup.
+ * Only for a response the account in question answered.
+ */
+export function withMeasured(previous: UsageView | undefined, windows: MeasuredWindow[], now: number): UsageView {
+  const measured: LimitView[] = windows.flatMap(window => {
+    if (window.kind === 'five_hour') return [{ label: '5h', percent: window.percentUsed, resetsAt: window.resetsAt }]
+    if (window.kind === 'seven_day') return [{ label: 'wk', percent: window.percentUsed, resetsAt: window.resetsAt }]
+
+    return []
+  })
+  const labels = new Set(measured.map(limit => limit.label))
+  const kept = (isLookedUp(previous) ? previous.limits : []).filter(limit => !labels.has(limit.label))
+
+  return { limits: [...measured, ...kept], fetchedAt: now, source: 'lookup' }
+}
+
+/** A failure as the pane shows it. */
+export function describeFailure(error: unknown, m: Messages): string {
+  if (error instanceof AnthropicError && (error.status === 400 || error.status === 401)) return m.authExpired
+
+  return error instanceof Error ? error.message : String(error)
+}

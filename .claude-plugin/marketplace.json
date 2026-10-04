@@ -1,0 +1,11 @@
+{
+  "name": "simplecore-mods",
+  "owner": { "name": "SimpleCORE", "email": "dev@simplecore.kr" },
+  "plugins": [
+    {
+      "name": "sc",
+      "source": "./mods/account-switch",
+      "description": "Switch between saved Claude logins and watch every account's rate limits"
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+import { describe, expect, test } from 'claude-code/testing'
+
+import { AnthropicError, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
+import { messagesFor } from '../hooks/i18n'
+import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, untilReset } from '../hooks/format'
+
+const NOW = Date.parse('2026-10-04T05:00:00Z')
+
+describe('untilReset', () => {
+  test('hours and minutes', async () => {
+    expect(untilReset('2026-10-04T07:56:30Z', NOW)).toBe('2h 56m')
+  })
+  test('days and hours', async () => {
+    expect(untilReset('2026-10-09T21:00:00Z', NOW)).toBe('5d 16h')
+  })
+  test('past reset', async () => {
+    expect(untilReset('2026-10-04T04:00:00Z', NOW)).toBe('now')
+  })
+})
+
+describe('parseUsage', () => {
+  test('reads the limits list with a scoped model', async () => {
+    const limits = parseUsage({
+      limits: [
+        { kind: 'session', percent: 27, resets_at: '2026-10-04T08:00:00Z' },
+        { kind: 'weekly_all', percent: 45, resets_at: '2026-10-07T02:00:00Z' },
+        { kind: 'weekly_scoped', percent: 0, scope: { model: { display_name: 'Fable' } } },
+      ],
+    })
+    expect(limits.map(limit => `${limit.label}:${limit.percent}`)).toEqual(['5h:27', 'wk:45', 'Fable:0'])
+  })
+  test('falls back to the five_hour and seven_day windows', async () => {
+    const limits = parseUsage({ five_hour: { utilization: 12, resets_at: null }, seven_day: null })
+    expect(limits).toEqual([{ label: '5h', percent: 12, resetsAt: undefined }])
+  })
+})
+
+test('bar', async () => {
+  expect(bar(50, 6)).toBe('━━━━━━')
+  expect(barParts(50, 6)).toEqual({ filled: '━━━', rest: '━━━' })
+  expect(barParts(130, 4)).toEqual({ filled: '━━━━', rest: '' })
+  expect(barParts(-5, 4)).toEqual({ filled: '', rest: '━━━━' })
+})
+
+test('pick by position, email and unique prefix', async () => {
+  const list = [
+    { uuid: 'u1', email: 'mia@example.org', savedAt: 0 },
+    { uuid: 'u2', email: 'sora@example.net', savedAt: 0 },
+    { uuid: 'u3', email: 'mina@example.com', savedAt: 0 },
+  ]
+  expect(pick(list, '2')?.uuid).toBe('u2')
+  expect(pick(list, 'mina@example.com')?.uuid).toBe('u3')
+  expect(pick(list, 'so')?.uuid).toBe('u2')
+  // Two emails start with "mi": no guess.
+  expect(pick(list, 'mi')).toBeUndefined()
+  expect(pick(list, '')).toBeUndefined()
+})
+
+describe('resetClock', () => {
+  const KST = -540
+  test('today shows the time alone', async () => {
+    expect(resetClock('2026-10-04T08:00:00Z', NOW, 'ko', KST)).toBe('17:00')
+  })
+  test('another day shows the date and weekday', async () => {
+    expect(resetClock('2026-10-07T02:00:00Z', NOW, 'ko', KST)).toBe('10/7(수) 11:00')
+    expect(resetClock('2026-10-07T02:00:00Z', NOW, 'en', KST)).toBe('Wed 10/7 11:00')
+  })
+  test('the local date, not the UTC date, decides today', async () => {
+    // 16:30 UTC on the 4th is 01:30 on the 5th in Seoul.
+    expect(resetClock('2026-10-04T16:30:00Z', NOW, 'en', KST)).toBe('Mon 10/5 01:30')
+  })
+})
+
+test('displayWidth counts Hangul as two cells', async () => {
+  expect(displayWidth('↻ 10/7(수) 11:00')).toBe(16)
+  expect(displayWidth('5h █░ 3%')).toBe(8)
+})
+
+test('packRows fills each row up to the room and keeps order', async () => {
+  const items = [20, 30, 25].map(width => ({ width }))
+  expect(packRows(items, 60, 3).map(row => row.map(item => item.width))).toEqual([[20, 30], [25]])
+  expect(packRows(items, 90, 3).map(row => row.length)).toEqual([3])
+  expect(packRows([{ width: 80 }], 40, 3).length).toBe(1)
+})
+
+test('isSameReset allows the sub-minute jitter between windows', async () => {
+  expect(isSameReset('2026-10-07T01:59:59.9Z', '2026-10-07T02:00:00Z')).toBe(true)
+  expect(isSameReset('2026-10-07T02:00:00Z', '2026-10-08T02:00:00Z')).toBe(false)
+  expect(isSameReset(undefined, '2026-10-07T02:00:00Z')).toBe(false)
+})
+
+test('parseProfile names the account a token belongs to', async () => {
+  const owner = parseProfile(
+    JSON.stringify({ account: { uuid: 'a1', email: 'x@example.com' }, organization: { uuid: 'o1', name: 'Org' } }),
+  )
+  expect(owner).toEqual({ accountUuid: 'a1', emailAddress: 'x@example.com', organizationUuid: 'o1', organizationName: 'Org' })
+  expect(() => parseProfile('{"organization":{}}')).toThrow()
+})
+
+test('a 429 keeps the previous reading, marked stale, with no message', async () => {
+  const previous = { limits: [{ label: '5h', percent: 30 }], fetchedAt: 1, source: 'lookup' as const }
+  const stale = failedReading(previous, new AnthropicError('x', 429), 99, messagesFor('ko'))
+  expect(stale).toEqual({ limits: previous.limits, fetchedAt: 1, isStale: true, source: 'lookup' })
+  const expired = failedReading(previous, new AnthropicError('x', 401), 99, messagesFor('en'))
+  expect(expired.error).toBe(messagesFor('en').authExpired)
+  expect(expired.isStale).toBeUndefined()
+})
+
+test('figures no lookup produced are never kept', async () => {
+  const copied = { limits: [{ label: 'wk', percent: 90 }], fetchedAt: 1 }
+  expect(failedReading(copied, new AnthropicError('x', 429), 99, messagesFor('en')).limits).toEqual([])
+  const old = { limits: [], fetchedAt: 1, error: 'old message' }
+  const fresh = { limits: [], fetchedAt: 2, source: 'lookup' as const }
+  expect(lookedUpOnly({ a: copied, b: old, c: fresh })).toEqual({ c: fresh })
+  expect(lookedUpOnly(undefined)).toEqual({})
+})
+
+test('withMeasured replaces the five-hour and weekly figures and keeps the rest', async () => {
+  const previous = {
+    limits: [
+      { label: '5h', percent: 10 },
+      { label: 'wk', percent: 20 },
+      { label: 'Fable', percent: 3 },
+    ],
+    fetchedAt: 1,
+    source: 'lookup' as const,
+  }
+  const next = withMeasured(previous, [
+    { kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-04T08:00:00Z' },
+    { kind: 'seven_day', percentUsed: 21 },
+    { kind: 'spend_limit', percentUsed: 50 },
+  ], 9)
+  expect(next.limits.map(limit => `${limit.label}:${limit.percent}`)).toEqual(['5h:12', 'wk:21', 'Fable:3'])
+  expect(next).toMatchObject({ fetchedAt: 9, source: 'lookup' })
+  // Figures no lookup produced are not carried along.
+  expect(withMeasured({ limits: [{ label: 'Fable', percent: 90 }], fetchedAt: 1 }, [], 9).limits).toEqual([])
+})
+
+test('releaseDateOf reads the date of the heading for that version only', async () => {
+  const changelog = '# Changes\n\n## 0.2.0 (2026-11-01)\n\n- b\n\n## 0.1.0 (2026-10-04)\n\n- a\n'
+  expect(releaseDateOf(changelog, '0.1.0')).toBe('2026-10-04')
+  expect(releaseDateOf(changelog, '0.2.0')).toBe('2026-11-01')
+  expect(releaseDateOf(changelog, '0.1')).toBeUndefined()
+  expect(releaseDateOf('', '0.1.0')).toBeUndefined()
+})

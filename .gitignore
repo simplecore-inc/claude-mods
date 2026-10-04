@@ -1,0 +1,7 @@
+# Written by the engine at every load
+mods/*/.claude-plugin/types/
+node_modules/
+
+# Local generators for docs/ (diagrams, screen examples); kept out of the repository
+.dev/
+.DS_Store

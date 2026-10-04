@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="704" height="419" viewBox="0 0 704 419" role="img" aria-label="The accounts pane">
+  <title>The accounts pane</title>
+  <rect width="100%" height="100%" rx="10" fill="#16181d"/>
+  <g font-family="Menlo, 'SF Mono', Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+  <text x="24.4" y="31.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">SimpleCORE Mods</text>
+  <text x="511.6" y="31.0" fill="#8a8a8a" xml:space="preserve" textLength="159.6" lengthAdjust="spacingAndGlyphs">v0.1.0 (2026-10-04)</text>
+  <rect x="24.4" y="53.0" width="638.4" height="80.0" rx="6" fill="none" stroke="#585858" stroke-width="1.2"/>
+  <text x="41.2" y="75.0" fill="#8a8a8a" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">○ </text>
+  <text x="58.0" y="75.0" fill="#ffffff" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">mina@example.com</text>
+  <text x="604.0" y="75.0" fill="#8a8a8a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⇄</text>
+  <text x="629.2" y="75.0" fill="#8a8a8a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">✕</text>
+  <text x="58.0" y="97.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">5h </text>
+  <rect x="83.2" y="91.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="83.2" y="91.5" width="24.2" height="3" rx="1.5" fill="#00d75f"/>
+  <text x="150.4" y="97.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs"> 36%</text>
+  <text x="217.6" y="97.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">wk </text>
+  <rect x="242.8" y="91.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="242.8" y="91.5" width="31.6" height="3" rx="1.5" fill="#00d75f"/>
+  <text x="310.0" y="97.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs"> 47%</text>
+  <text x="360.4" y="97.0" fill="#8a8a8a" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">Fable </text>
+  <rect x="410.8" y="91.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <text x="478.0" y="97.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> 0%</text>
+  <text x="58.0" y="119.0" fill="#8a8a8a" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">↻ 16:59 (1h 51m)</text>
+  <text x="217.6" y="119.0" fill="#8a8a8a" xml:space="preserve" textLength="210.0" lengthAdjust="spacingAndGlyphs">↻ Wed 10/7 10:59 (2d 19h)</text>
+  <rect x="24.4" y="152.0" width="638.4" height="80.0" rx="6" fill="none" stroke="#585858" stroke-width="1.2"/>
+  <text x="41.2" y="174.0" fill="#8a8a8a" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">○ </text>
+  <text x="58.0" y="174.0" fill="#ffffff" xml:space="preserve" textLength="126.0" lengthAdjust="spacingAndGlyphs">jun@example.org</text>
+  <text x="192.4" y="174.0" fill="#d7af00" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">◷</text>
+  <text x="604.0" y="174.0" fill="#8a8a8a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">⇄</text>
+  <text x="629.2" y="174.0" fill="#8a8a8a" xml:space="preserve" textLength="8.4" lengthAdjust="spacingAndGlyphs">✕</text>
+  <text x="58.0" y="196.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">5h </text>
+  <rect x="83.2" y="190.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="83.2" y="190.5" width="1.3" height="3" rx="1.5" fill="#00d75f"/>
+  <text x="150.4" y="196.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> 2%</text>
+  <text x="217.6" y="196.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">wk </text>
+  <rect x="242.8" y="190.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="242.8" y="190.5" width="60.5" height="3" rx="1.5" fill="#ff5f5f"/>
+  <text x="310.0" y="196.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs"> 90%</text>
+  <text x="360.4" y="196.0" fill="#8a8a8a" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">Fable </text>
+  <rect x="410.8" y="190.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <text x="478.0" y="196.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> 0%</text>
+  <text x="58.0" y="218.0" fill="#8a8a8a" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">↻ 19:29 (4h 21m)</text>
+  <text x="217.6" y="218.0" fill="#8a8a8a" xml:space="preserve" textLength="210.0" lengthAdjust="spacingAndGlyphs">↻ Tue 10/6 06:59 (1d 15h)</text>
+  <rect x="24.4" y="251.0" width="638.4" height="80.0" rx="6" fill="none" stroke="#5fd7d7" stroke-width="1.2"/>
+  <text x="41.2" y="273.0" fill="#5fd7d7" xml:space="preserve" textLength="16.8" lengthAdjust="spacingAndGlyphs">● </text>
+  <text x="58.0" y="273.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">sora@example.net</text>
+  <rect x="198.8" y="260.0" width="71.2" height="18" rx="2" fill="#5fd7d7"/>
+  <text x="205.0" y="273.0" fill="#000000" font-weight="700" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">active</text>
+  <text x="58.0" y="295.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">5h </text>
+  <rect x="83.2" y="289.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="83.2" y="289.5" width="2.7" height="3" rx="1.5" fill="#00d75f"/>
+  <text x="150.4" y="295.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> 4%</text>
+  <text x="217.6" y="295.0" fill="#8a8a8a" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs">wk </text>
+  <rect x="242.8" y="289.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <rect x="242.8" y="289.5" width="27.6" height="3" rx="1.5" fill="#00d75f"/>
+  <text x="310.0" y="295.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="33.6" lengthAdjust="spacingAndGlyphs"> 41%</text>
+  <text x="360.4" y="295.0" fill="#8a8a8a" xml:space="preserve" textLength="50.4" lengthAdjust="spacingAndGlyphs">Fable </text>
+  <rect x="410.8" y="289.5" width="67.2" height="3" rx="1.5" fill="#4e4e4e"/>
+  <text x="478.0" y="295.0" fill="#ffffff" font-weight="700" xml:space="preserve" textLength="25.2" lengthAdjust="spacingAndGlyphs"> 0%</text>
+  <text x="58.0" y="317.0" fill="#8a8a8a" xml:space="preserve" textLength="134.4" lengthAdjust="spacingAndGlyphs">↻ 19:40 (4h 31m)</text>
+  <text x="217.6" y="317.0" fill="#8a8a8a" xml:space="preserve" textLength="201.6" lengthAdjust="spacingAndGlyphs">↻ Tue 10/6 23:00 (2d 7h)</text>
+  <rect x="24.4" y="358.8" width="206.6" height="36.0" rx="6" fill="#262b33" stroke="#5fd7d7" stroke-width="1.2"/>
+  <text x="98.3" y="380.8" fill="#d0d0d0" xml:space="preserve" textLength="58.8" lengthAdjust="spacingAndGlyphs">Refresh</text>
+  <rect x="239.4" y="358.8" width="206.6" height="36.0" rx="6" fill="#262b33" stroke="#585858" stroke-width="1.2"/>
+  <text x="296.6" y="380.8" fill="#d0d0d0" xml:space="preserve" textLength="92.4" lengthAdjust="spacingAndGlyphs">Add account</text>
+  <rect x="454.5" y="358.8" width="206.6" height="36.0" rx="6" fill="#262b33" stroke="#585858" stroke-width="1.2"/>
+  <text x="536.8" y="380.8" fill="#d0d0d0" xml:space="preserve" textLength="42.0" lengthAdjust="spacingAndGlyphs">Close</text>
+  </g>
+</svg>

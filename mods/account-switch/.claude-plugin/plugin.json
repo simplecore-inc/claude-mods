@@ -1,0 +1,18 @@
+{
+  "name": "sc",
+  "version": "0.1.0",
+  "description": "Switch between saved Claude logins and watch every account's rate limits",
+  "author": {
+    "name": "SimpleCORE",
+    "email": "dev@simplecore.kr"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "showStatusBand": {
+      "type": "boolean",
+      "title": "Show the status band",
+      "description": "Show the session status (model, context, account usage, place, lines changed) on the band above the prompt",
+      "default": true
+    }
+  }
+}
