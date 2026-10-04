@@ -57,7 +57,8 @@ npx -p typescript tsc -p mods/<name>
 
 1. Set the new version in `VERSION`.
 2. Add its heading to `CHANGELOG.md`, `## <version> (<YYYY-MM-DD>)`, with a section for each mod it changes.
-3. Run `node scripts/sync.mjs`. It refuses a version that is not semver or has no heading, writes the version into every `plugin.json`, and copies the changelog into each plugin, where the pane header reads the release date from it.
+3. Run `node scripts/sync.mjs`. It refuses a version that is not semver or has no heading, writes the version into every `plugin.json`, and copies the changelog into each plugin, where the pane header reads the release date from it. It also writes the version and date into the pane header of every picture in `docs/images/`, and refuses to overwrite a copy that has uncommitted edits.
+4. Bring every picture in `docs/images/` up to date with the screens as they now draw: a changed layout, colour, label or dialog is changed in its picture in the same release.
 
 ## Adding a mod
 

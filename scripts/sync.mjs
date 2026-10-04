@@ -4,19 +4,23 @@
 //   shared/          code the mods share  -> mods/<mod>/hooks/shared/
 //   VERSION          the one version       -> "version" in mods/<mod>/.claude-plugin/plugin.json
 //   CHANGELOG.md     the one changelog     -> mods/<mod>/CHANGELOG.md
+//   VERSION + date   the release           -> the pane header drawn in docs/images/*.svg
 //
 // A plugin reads only files inside its own folder, so each source is copied
 // in. The copies are never edited by hand: edit the source, then run this.
 //
 //   node scripts/sync.mjs          write the copies
 //   node scripts/sync.mjs --check  exit 1 when a copy differs from its source
+//   node scripts/sync.mjs --force  overwrite copies that have uncommitted edits
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const isCheck = process.argv.includes('--check')
+const isForced = process.argv.includes('--force')
 const codeBanner = '// Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.\n'
 const changelogBanner = '<!-- Copied from the repository\'s CHANGELOG.md by scripts/sync.mjs; edit that file and run the script. -->\n\n'
 
@@ -30,6 +34,7 @@ if (!new RegExp(`^## ${version.replace(/\./g, '\\.')} \\(\\d{4}-\\d{2}-\\d{2}\\)
   console.error(`CHANGELOG.md has no "## ${version} (YYYY-MM-DD)" heading for the version in VERSION`)
   process.exit(1)
 }
+const date = changelog.match(new RegExp(`^## ${version.replace(/\./g, '\\.')} \\((\\d{4}-\\d{2}-\\d{2})\\)`, 'm'))[1]
 const sharedFiles = readdirSync(join(root, 'shared')).filter(name => /\.(ts|tsx)$/.test(name)).sort()
 const mods = readdirSync(join(root, 'mods'), { withFileTypes: true })
   .filter(entry => entry.isDirectory() && existsSync(join(root, 'mods', entry.name, '.claude-plugin', 'plugin.json')))
@@ -46,9 +51,38 @@ function put(path, text) {
     console.error(`stale: ${shown}`)
     return
   }
+  // A copy with uncommitted changes was edited by hand; overwriting it would lose them.
+  if (!isForced && current !== undefined && isCopy(path) && isEdited(path)) {
+    console.error(`refused: ${shown} has uncommitted edits; move them to their source, or pass --force once they are there`)
+    process.exit(1)
+  }
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, text)
   console.log(`wrote ${shown}`)
+}
+
+/** Whether `path` is a copy this script writes from a source, rather than a file it edits in place. */
+function isCopy(path) {
+  return path.includes(`${join('hooks', 'shared')}`) || path.endsWith('CHANGELOG.md')
+}
+
+/** Whether git sees uncommitted changes in `path`. */
+function isEdited(path) {
+  try {
+    execFileSync('git', ['diff', '--quiet', 'HEAD', '--', path], { cwd: root, stdio: 'ignore' })
+    return false
+  } catch (error) {
+    if (error && typeof error === 'object' && 'status' in error && error.status === 1) return true
+    throw error
+  }
+}
+
+// The pane header in the documentation's pictures names the release.
+const imagesDir = join(root, 'docs', 'images')
+for (const name of existsSync(imagesDir) ? readdirSync(imagesDir).filter(file => file.endsWith('.svg')).sort() : []) {
+  const path = join(imagesDir, name)
+  const svg = readFileSync(path, 'utf8')
+  put(path, svg.replace(/>v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)</g, `>v${version} (${date})<`))
 }
 
 for (const mod of mods) {
