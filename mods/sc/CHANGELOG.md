@@ -4,6 +4,15 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.3.4 (2026-10-05)
+
+### Workspace (`sc-workspace`)
+
+- The base dialog keeps every choice on one line: a long label is cut to what the change counts leave, and a label of several lines is joined into one.
+- The base dialog counts what changed since each checkpoint when it opens, the session start included, instead of showing `…` until the Checkpoints tab is opened.
+- On a narrow pane the tabs move to a new row instead of wrapping inside, and an unselected tab has a light background.
+- The Diff tab's base reads as a select, on a light background.
+
 ## 0.3.3 (2026-10-04)
 
 ### Accounts (`sc-accounts`)

@@ -238,14 +238,20 @@ async function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], l
   return row
 }
 
-/** Counts, for the checkpoints shown, what changed since each against the working tree now. */
+/**
+ * Counts what changed since each checkpoint shown against the working tree now,
+ * and since the session's start, which the base dialog offers even past them.
+ */
 async function refreshSince($: EngineInterface): Promise<void> {
   if (!root) return
   const run = runner($)
   const tree = await snapshot($)
   const list = await read($, checkpoints)
+  const shown = list.slice(0, CHECKPOINTS_SHOWN)
+  const start = list.find(row => row.ref === baseline?.ref) ?? list.find(row => row.kind === 'session')
+  if (start && !shown.includes(start)) shown.push(start)
   const counted = new Map<string, CheckpointRow['since']>()
-  for (const row of list.slice(0, CHECKPOINTS_SHOWN)) counted.set(row.ref, await diffSummary(run, root, row.commit, tree))
+  for (const row of shown) counted.set(row.ref, await diffSummary(run, root, row.commit, tree))
   // Merged by ref into the list as it stands now: a checkpoint taken while these were counted stays.
   const changed = list.some(row => counted.has(row.ref) && JSON.stringify(counted.get(row.ref)) !== JSON.stringify(row.since))
   if (changed) await update($, checkpoints, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
@@ -755,12 +761,13 @@ export const register: Register = (on, options) => {
       })().catch((error: unknown) => $.ui.toast(message(error)))
     }
     // Whatever cannot be taken back asks in the dialog first.
-    const ask = (kind: Dialog['kind'], ref: string) =>
+    const ask = (kind: Dialog['kind'], ref: string, then?: () => Promise<void>) =>
       act(async () => {
         await update($, dialog, () => ({ kind, ref }))
         // The dialog is drawn in this pane, which takes the keys so Enter answers it; Esc
         // asks the pane to close, which the ui.close hook turns into Cancel.
         await $.ui.open({ id: PANE, title: TAB_LABEL, focus: true, closeOnEscape: true })
+        await then?.()
       })()
     const select = (key: string) => act(() => openPane($, key as Tab))()
 
@@ -866,7 +873,9 @@ export const register: Register = (on, options) => {
             act(async () => {
               await update($, diff, view => (view ? { ...view, selected: undefined } : view))
             })(),
-          chooseBase: () => ask('base', ''),
+          // The dialog shows what changed since each checkpoint, counted here when it opens:
+          // nothing else counts them outside the Checkpoints tab.
+          chooseBase: () => ask('base', '', () => refreshSince($)),
         },
       )
       tiles = [refreshTile(() => refreshDiff($)), close]

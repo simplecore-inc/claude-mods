@@ -5,6 +5,7 @@ import type { On } from 'claude-code'
 import { changeCells, splitPath } from '../hooks/views/diff'
 import { removeArgv } from '../hooks/shared/files'
 import { clipDiff } from '../hooks/git'
+import { displayWidth } from '../hooks/shared/layout'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = Date.parse('2026-10-04T05:00:00Z')
@@ -73,6 +74,18 @@ test('the tab bar shows every tab, with counts on the ones that have something',
     for (const badge of [' 1', ' 2', ' 3']) expect(await ui.find({ type: 'Text', text: badge })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('on a narrow pane the tabs move to a new row instead of wrapping inside, every tab on a background', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'terminal', 30)
+  expect((await ui.find({ key: 'tabs' }))?.props).toMatchObject({ flexWrap: 'wrap' })
+  for (const key of ['agents', 'checkpoints', 'notes', 'diff']) {
+    const props = (await ui.find({ key: `tab-${key}` }))?.props
+    expect(props).toMatchObject({ flexShrink: 0 })
+    expect(props?.backgroundColor).toBeDefined()
+  }
+  await ui.unmount()
 })
 
 test('the agents tab: a running agent can be stopped, a merged clean worktree removed', async ($, on) => {
@@ -316,6 +329,7 @@ test('the diff tab names its base as a button that opens the base dialog', async
   for (const surface of [...SURFACES, 'mobile'] as const) {
     const ui = await mountPane($, surface)
     expect((await ui.find({ key: 'diff-base' }))?.text).toMatch(/Session start ▾$/)
+    expect((await ui.find({ key: 'diff-base-field' }))?.props.backgroundColor).toBeDefined()
     await ui.unmount()
   }
   const ui = await mountPane($, 'terminal')
@@ -347,6 +361,26 @@ test('the base dialog lists the checkpoints with what changed since each, the ba
     expect(await ui.find({ key: 'tabs' })).toBeUndefined()
     await ui.unmount()
   }
+})
+
+test('on a narrow pane a base choice keeps one line: the label is cut to what the counts leave', async ($, on) => {
+  const label = '앱 재실행해도 됨. target/debug도 정리해\n그리고 다음 작업을 이어서 진행해 주세요'
+  seedState(on, {
+    tab: 'diff',
+    dialog: { kind: 'base', ref: '' },
+    checkpoints: [
+      { ref: 'refs/sc/checkpoints/s/0002', commit: 'c2', tree: 't2', at: NOW - 60_000, label, kind: 'turn', since: { files: 13, added: 408, removed: 71 } },
+    ],
+    diff: { base: { commit: 'c2', label, at: NOW - 60_000, isSessionStart: false }, files: [], at: NOW },
+  })
+  const ui = await mountPane($, 'terminal', 50)
+  const shown = (await ui.find({ key: 'base-c2' }))?.text ?? ''
+  const detail = '13 files +408 −71'
+  expect(shown.includes('\n')).toBe(false)
+  expect(await ui.find({ type: 'Text', text: detail })).toBeDefined()
+  // Mark, label and counts fit inside the dialog's border and padding.
+  expect(1 + 1 + displayWidth(shown) + 1 + displayWidth(detail)).toBeLessThanOrEqual(50 - 4)
+  await ui.unmount()
 })
 
 test('Close closes the workspace pane itself', async ($, on) => {

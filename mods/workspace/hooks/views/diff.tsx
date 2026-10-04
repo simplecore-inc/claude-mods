@@ -108,13 +108,16 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
       <Box key="diff-head" gap={1}>
         {Section(ui, 'diff-title', m.diffTitle)}
         <Text dimColor>{m.diffBaseLabel}</Text>
-        <Button
-          key="diff-base"
-          label={`${baseLabel(diff.base, model.now, model.locale)} ▾`}
-          plain
-          hover={{ color: theme.accent, bold: true }}
-          onPress={actions.chooseBase}
-        />
+        {/* The base reads as a select: on the tabs' background, lighter under the pointer. */}
+        <Box key="diff-base-field" paddingX={1} flexShrink={0} backgroundColor={theme.switchOff} hover={{ backgroundColor: theme.tabActive }}>
+          <Button
+            key="diff-base"
+            label={`${baseLabel(diff.base, model.now, model.locale)} ▾`}
+            plain
+            hover={{ color: theme.accent, bold: true }}
+            onPress={actions.chooseBase}
+          />
+        </Box>
       </Box>
       {diff.files.length === 0 && Empty(ui, 'diff-empty', [m.diffEmpty])}
       {diff.files.length > 0 && (

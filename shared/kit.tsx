@@ -1,6 +1,6 @@
 import type { ElementTable } from 'claude-code'
 
-import { barParts, displayWidth, padCells, severityColor } from './layout'
+import { barParts, displayWidth, padCells, severityColor, truncate } from './layout'
 
 /**
  * The pieces every tab of the pane is built from, so the tabs look like one
@@ -63,7 +63,8 @@ export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSele
   const { Box, Button, Text } = ui
 
   return (
-    <Box key="tabs" gap={1} marginTop={1}>
+    // A tab never wraps inside: on a narrow pane the next tab moves to a new row.
+    <Box key="tabs" gap={1} marginTop={1} flexWrap="wrap">
       {tabs.map(tab => {
         const isActive = tab.key === active
 
@@ -71,7 +72,8 @@ export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSele
           <Box
             key={`tab-${tab.key}`}
             paddingX={1}
-            backgroundColor={isActive ? theme.tabActive : undefined}
+            flexShrink={0}
+            backgroundColor={isActive ? theme.tabActive : theme.switchOff}
             hover={{ backgroundColor: theme.tabActive }}
           >
             <Button
@@ -342,7 +344,12 @@ export function ChoiceDialog(
   focused: string | null = null,
 ) {
   const { Box, Button, Text } = ui
-  const labelWidth = Math.max(0, ...choices.map(choice => displayWidth(choice.label)))
+  // Every row is one line: the details share one column at the right, and the labels
+  // take what is left of the dialog's width and are cut to it, never wrapped.
+  const detailWidth = Math.max(0, ...choices.map(choice => displayWidth(choice.detail ?? '')))
+  const labelRoom = Math.max(6, bodyColumns - CARD_CHROME - 2 - (detailWidth > 0 ? detailWidth + 1 : 0))
+  const labels = choices.map(choice => truncate(choice.label.replace(/\s+/g, ' ').trim(), labelRoom))
+  const labelWidth = Math.max(0, ...labels.map(displayWidth))
 
   return DialogFrame(
     ui,
@@ -350,20 +357,26 @@ export function ChoiceDialog(
     theme.accent,
     title,
     <Box key="dialog-choices" flexDirection="column" marginTop={1}>
-      {choices.map(choice => (
+      {choices.map((choice, index) => (
         <Box key={`choice-${choice.key}`} gap={1}>
           <Text color={choice.isCurrent ? theme.accent : undefined} dimColor={!choice.isCurrent}>
             {choice.isCurrent ? '●' : '○'}
           </Text>
           <Button
             key={choice.key}
-            label={padCells(choice.label, labelWidth)}
+            label={padCells(labels[index] ?? '', labelWidth)}
             plain
             hover={{ color: theme.accent, bold: true }}
             {...(choice.isCurrent ? { autoFocus: true as const } : {})}
             onPress={choice.onPress}
           />
-          {choice.detail && <Text dimColor>{choice.detail}</Text>}
+          {choice.detail && (
+            <Box flexShrink={0}>
+              <Text dimColor wrap="truncate-end">
+                {choice.detail}
+              </Text>
+            </Box>
+          )}
         </Box>
       ))}
     </Box>,
