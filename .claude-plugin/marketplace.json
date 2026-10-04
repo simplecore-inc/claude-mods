@@ -4,21 +4,49 @@
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"
   },
+  "description": "SimpleCORE Claude Mods: Claude Code plugins for switching between Claude accounts, watching usage limits in a status band, and a workspace pane for agents, worktrees, checkpoints and diffs",
   "plugins": [
     {
       "name": "sc",
       "source": "./mods/sc",
-      "description": "SimpleCORE Claude Mods: installs every mod and gives them the /sc: commands"
+      "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, and a workspace pane for agents, worktrees, checkpoints, notes and diffs",
+      "category": "productivity",
+      "tags": [
+        "bundle",
+        "accounts",
+        "usage-limits",
+        "statusline",
+        "workspace",
+        "git-worktree",
+        "checkpoints"
+      ]
     },
     {
       "name": "sc-accounts",
       "source": "./mods/accounts",
-      "description": "Switch between saved Claude logins and watch every account's usage limits and the session status"
+      "description": "Switch between saved Claude logins and watch every account's usage limits and the session status",
+      "category": "productivity",
+      "tags": [
+        "account-switcher",
+        "multi-account",
+        "usage-limits",
+        "rate-limits",
+        "statusline"
+      ]
     },
     {
       "name": "sc-workspace",
       "source": "./mods/workspace",
-      "description": "A workspace pane: agents and worktrees, checkpoints, notes and changes in one tabbed pane"
+      "description": "A workspace pane: agents and worktrees, checkpoints, notes and changes in one tabbed pane",
+      "category": "development",
+      "tags": [
+        "workspace",
+        "subagents",
+        "git-worktree",
+        "checkpoints",
+        "notes",
+        "diff"
+      ]
     }
   ]
 }
