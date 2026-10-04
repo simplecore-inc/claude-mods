@@ -126,6 +126,8 @@ let hostname: string | null = null
 let engineVersion: string | null = null
 /** The effort and model the latest main-loop request named; null before the first. */
 let requestEffort: string | null = null
+/** The effort the settings named at the last status read: a change there (`/effort`) outranks the last request's. */
+let lastSettledEffort: string | null | undefined
 /** This session's lines added and removed by file-changing tool calls. */
 let lines = { added: 0, removed: 0 }
 /** The webhook feed's settings, as stored. */
@@ -558,6 +560,9 @@ async function collectStatusOnce($: EngineInterface): Promise<StatusInfo | null>
   const cwd = await $.session.cwd()
   const modelId = await $.session.model()
   const settings = (await $.settings.read()) as { effortLevel?: unknown; modelSettings?: unknown; fastMode?: unknown }
+  const settled = settledEffort(settings, modelId)
+  if (lastSettledEffort !== undefined && settled !== lastSettledEffort) requestEffort = null
+  lastSettledEffort = settled
   const branch = await collector.branch(cwd)
   const now = await $.clock.now()
   const [pr, task, ultracode] = await Promise.all([
@@ -569,7 +574,7 @@ async function collectStatusOnce($: EngineInterface): Promise<StatusInfo | null>
   const next: StatusInfo = {
     updatedAt: now,
     model: displayModel(modelId),
-    effort: requestEffort ?? settledEffort(settings, modelId),
+    effort: requestEffort ?? settled,
     ultracode,
     fast: settings.fastMode === true,
     contextUsed: usageNow.context.percent ?? null,
@@ -839,6 +844,8 @@ async function refreshAll($: EngineInterface, isAsked: boolean): Promise<void> {
 }
 
 async function refresh($: EngineInterface, isAsked: boolean): Promise<void> {
+  // Asked for, the band's model and effort are read again too.
+  if (isAsked) void collectStatus($).catch((error: unknown) => debugLog($, error))
   try {
     await refreshAll($, isAsked)
   } catch (error) {
@@ -993,6 +1000,7 @@ async function adoptSession($: EngineInterface): Promise<void> {
   const savedLines = (((await $.store.get(LINES_KEY)) ?? {}) as Record<string, { added: number; removed: number }>)[sessionId]
   lines = { added: savedLines?.added ?? 0, removed: savedLines?.removed ?? 0 }
   requestEffort = null
+  lastSettledEffort = undefined
   lastFeed = { key: '', at: 0 }
   await loadIndex($)
   // The machine's shared readings, under what this session already holds.

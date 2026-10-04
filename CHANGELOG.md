@@ -2,6 +2,13 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.3.3 (2026-10-04)
+
+### Accounts (`sc-accounts`)
+
+- Refreshing (the pane's Refresh button or `/sc:accounts refresh`) reads the status band's model and effort again too.
+- An effort changed with `/effort` shows on the band at the next status read, instead of waiting for the next request.
+
 ## 0.3.2 (2026-10-04)
 
 ### All plugins
