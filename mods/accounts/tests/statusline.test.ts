@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ansiHex, contextScaled, modelPill, parseStatusInfo, pillWidth, placePill, reviewMark, shortModel } from '../hooks/statusline'
+import type { StatusInfo } from '../types'
+import { ansiHex, contextScaled, modelPill, pillWidth, placePill, reviewMark, shortModel } from '../hooks/statusline'
 
-const STATUS = parseStatusInfo({
+const STATUS: StatusInfo = {
   updatedAt: 1,
   model: 'Opus 5.5 (1M context)',
   effort: 'low',
@@ -15,7 +16,7 @@ const STATUS = parseStatusInfo({
   pr: { number: 12, reviewState: 'approved' },
   linesAdded: 3,
   linesRemoved: 1,
-})!
+}
 
 describe('ansiHex', () => {
   test('the base, cube and grey ranges', async () => {
@@ -50,8 +51,3 @@ test('the place pill, its width and the review mark', async () => {
   expect(reviewMark(null)).toBeUndefined()
 })
 
-test('parseStatusInfo refuses a file the command did not write', async () => {
-  expect(parseStatusInfo({ model: 'x' })).toBeNull()
-  expect(parseStatusInfo(undefined)).toBeNull()
-  expect(parseStatusInfo({ model: 'x', updatedAt: 1, pr: { number: 'x' } })?.pr).toBeNull()
-})

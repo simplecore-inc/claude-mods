@@ -1,17 +1,34 @@
-import type { ElementTable } from 'claude-code'
+import type { ElementTable, RenderElement } from 'claude-code'
 
-import type { AccountView, LimitView, StatusInfo, UsageView } from '../../types'
+import type { AccountView, BandSpan, BandTarget, LimitView, StatusInfo, UsageView } from '../../types'
 import { bar, barParts, displayWidth, packRows, resetClock, severityColor } from '../format'
 import type { Locale } from '../i18n'
 import { ansiHex, contextLabelColor, contextScaled, modelPill, pillWidth, placePill, reviewMark } from '../statusline'
 import type { PillSegment } from '../statusline'
 import { STALE_MARK } from './accounts'
-import { GAUGE_WIDTH as BAR_WIDTH } from '../shared/kit'
+import { GAUGE_WIDTH as BAR_WIDTH, Rule } from '../shared/kit'
 
 /** The xterm-256 ground behind the context gauge. */
 const CONTEXT_GROUND = 236
+/** The xterm-256 ground behind the lines changed. */
+const LINES_GROUND = 236
 /** Cells between two cells of the band's status line. */
 const STATUS_GAP = 1
+
+/** A span's look as Text props, so a face and a Button's hover draw it alike. */
+export function look(span: BandSpan) {
+  return {
+    ...(span.color ? { color: span.color } : {}),
+    ...(span.backgroundColor ? { backgroundColor: span.backgroundColor } : {}),
+    ...(span.bold ? { bold: true as const } : {}),
+    ...(span.dimColor ? { dimColor: true as const } : {}),
+  }
+}
+
+/** A span's Button hover: the span's own look, never the inversion a Button takes under the pointer. */
+export function pressedLook(span: BandSpan) {
+  return { inverse: false, ...look(span) }
+}
 
 export type BandModel = {
   status: StatusInfo | null
@@ -23,6 +40,8 @@ export type BandModel = {
   locale: Locale
   /** Cells the band may fill across. */
   room: number
+  /** Toggles what a cell's label opens: the accounts pane, or the workspace. */
+  onPress: (target: BandTarget) => void
 }
 
 /**
@@ -31,8 +50,57 @@ export type BandModel = {
  * the context gauge, the usage windows, the place and the lines changed.
  */
 export function StatusBand(ui: ElementTable, model: BandModel) {
-  const { Box, Text } = ui
-  const { status, account, reading, windows, contextUsed, now, locale, room } = model
+  const { Box, Button, Text } = ui
+  const { status, account, reading, windows, contextUsed, now, locale, room, onPress } = model
+  /** Spans drawn in their own colours. */
+  const drawSpans = (key: string, spans: BandSpan[]): RenderElement => (
+    <Text key={key}>
+      {spans.map((span, index) => (
+        <Text key={`${key}-${index}`} {...look(span)}>
+          {span.text}
+        </Text>
+      ))}
+    </Text>
+  )
+  /**
+   * A cell that toggles `target` when pressed, drawn from spans in their own
+   * colours. Only a Button press counts as the person asking, which places a
+   * pane at any width, and a Button takes no colour at rest; so over the face
+   * lies a row of Buttons, one per span, hidden until the pointer is on the
+   * cell. Each Button's hover is its span's look and never inverts, so the
+   * revealed row draws exactly as the face does, and takes the press.
+   */
+  const pressCell = (key: string, target: BandTarget, spans: BandSpan[]): RenderElement => (
+    <Box key={key}>
+      {drawSpans(`${key}-face`, spans)}
+      {/* Unkeyed, so the hover that reveals it is the cell's. */}
+      <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex' }}>
+        {spans
+          .filter(span => span.text !== '')
+          .map((span, index) => (
+            <Button
+              key={index === 0 ? `band-${key}` : `band-${key}-${index}`}
+              label={span.text}
+              plain
+              hover={pressedLook(span)}
+              onPress={() => onPress(target)}
+            />
+          ))}
+      </Box>
+    </Box>
+  )
+  /** A pill as spans: a half block, each segment on its ground, the half block after it. */
+  const pillSpans = (segments: PillSegment[]): BandSpan[] => [
+    { text: '▐', color: ansiHex(segments[0]?.bg ?? 0) },
+    ...segments.flatMap((segment, index) => {
+      const after = segments[index + 1]
+
+      return [
+        { text: segment.text, color: ansiHex(segment.fg), backgroundColor: ansiHex(segment.bg), ...(segment.bold ? { bold: true } : {}) },
+        { text: '▌', color: ansiHex(segment.bg), ...(after ? { backgroundColor: ansiHex(after.bg) } : {}) },
+      ]
+    }),
+  ]
 
   const drawPill = (key: string, segments: PillSegment[]) => (
     <Text key={key}>
@@ -64,37 +132,35 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     </Text>
   )
 
-  type Cell = { key: string; width: number; draw: () => ReturnType<typeof drawPill> }
+  type Cell = { key: string; width: number; draw: () => RenderElement }
+  /** A filled cell: its spans on one ground, rounded off by half blocks. */
+  const onGround = (ground: string, spans: BandSpan[]): BandSpan[] => [
+    { text: '▐', color: ground },
+    ...spans.map(span => ({ ...span, backgroundColor: ground })),
+    { text: '▌', color: ground },
+  ]
   const first: Cell[] = []
   // The session's own context reading comes first; the status line's forward when it has none yet.
   if (contextUsed !== null) {
     // The usage bars' gauge, coloured by the context thresholds, on a ground of its own.
     const scaled = contextScaled(contextUsed)
-    const { filled, rest } = barParts(scaled, BAR_WIDTH)
+    const { filled: gauge, rest } = barParts(scaled, BAR_WIDTH)
     const label = scaled >= 95 ? `✖ ${scaled}%` : `${scaled}%`
     const ground = ansiHex(CONTEXT_GROUND)
     const ink = ansiHex(contextLabelColor(scaled))
     first.push({
       key: 'context',
       width: displayWidth(`ctx ${bar(scaled, BAR_WIDTH)} ${label}`) + 2,
-      draw: () => (
-        <Text key="context">
-          <Text color={ground}>▐</Text>
-          <Text backgroundColor={ground} color={ansiHex(250)}>
-            ctx{' '}
-          </Text>
-          <Text backgroundColor={ground} color={ink}>
-            {filled}
-          </Text>
-          <Text backgroundColor={ground} color={ansiHex(240)}>
-            {rest}
-          </Text>
-          <Text backgroundColor={ground} color={ink} bold>
-            {` ${label}`}
-          </Text>
-          <Text color={ground}>▌</Text>
-        </Text>
-      ),
+      draw: () =>
+        drawSpans(
+          'context',
+          onGround(ground, [
+            { text: 'ctx ', color: ansiHex(250) },
+            { text: gauge, color: ink },
+            { text: rest, color: ansiHex(240) },
+            { text: ` ${label}`, color: ink, bold: true },
+          ]),
+        ),
     })
   }
   if (status) {
@@ -120,12 +186,12 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     second.push({
       key: 'account',
       width: displayWidth(name),
-      draw: () => (
-        <Text key="account">
-          <Text color={ansiHex(110)}>{account.email}</Text>
-          {reading?.isStale && <Text color="yellow" dimColor>{` ${STALE_MARK}`}</Text>}
-        </Text>
-      ),
+      draw: () =>
+        pressCell(
+          'account',
+          'accounts',
+          [{ text: account.email, color: ansiHex(110), bold: true }, ...(reading?.isStale ? [{ text: ` ${STALE_MARK}`, color: 'yellow', dimColor: true }] : [])],
+        ),
     })
   }
   for (const limit of windows) {
@@ -135,17 +201,14 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     second.push({
       key: limit.label,
       width: displayWidth(text),
-      draw: () => (
-        <Text key={`usage-${limit.label}`}>
-          <Text dimColor>{limit.label} </Text>
-          <Text color={severityColor(limit.percent)}>{filled}</Text>
-          <Text color="gray" dimColor>
-            {rest}
-          </Text>
-          <Text> {Math.round(limit.percent)}%</Text>
-          {reset && <Text dimColor> ↻ {reset}</Text>}
-        </Text>
-      ),
+      draw: () =>
+        drawSpans(`usage-${limit.label}`, [
+          { text: `${limit.label} `, dimColor: true },
+          { text: filled, color: severityColor(limit.percent) },
+          { text: rest, color: 'gray', dimColor: true },
+          { text: ` ${Math.round(limit.percent)}%` },
+          ...(reset ? [{ text: ` ↻ ${reset}`, dimColor: true }] : []),
+        ]),
     })
   }
   // The place comes last, right before the lines changed.
@@ -157,36 +220,32 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     second.push({
       key: 'place',
       width: pillWidth(place, displayWidth) + displayWidth(prText),
-      draw: () => (
-        <Text key="place">
-          {drawPill('place-pill', place)}
-          {pr && (
-            <Text color={ansiHex(75)} bold>
-              {` #${pr.number}`}
-            </Text>
-          )}
-          {mark && <Text color={ansiHex(mark.fg)}>{mark.text}</Text>}
-        </Text>
-      ),
+      // The place opens the workspace too, as the lines changed do.
+      draw: () =>
+        pressCell('place', 'workspace', [
+          ...pillSpans(place),
+          ...(pr ? [{ text: ` #${pr.number}`, color: ansiHex(75), bold: true }] : []),
+          ...(mark ? [{ text: mark.text, color: ansiHex(mark.fg) }] : []),
+        ]),
     })
   }
   if (status && (status.linesAdded > 0 || status.linesRemoved > 0)) {
     const added = `+${status.linesAdded}`
     const removed = `-${status.linesRemoved}`
+    // One filled block, so the counts read as one thing.
     second.push({
       key: 'lines',
-      width: displayWidth(`${added} ${removed}`),
-      draw: () => (
-        <Text key="lines">
-          <Text color={ansiHex(42)} bold>
-            {added}
-          </Text>
-          <Text> </Text>
-          <Text color={ansiHex(203)} bold>
-            {removed}
-          </Text>
-        </Text>
-      ),
+      width: displayWidth(`${added} ${removed}`) + 2,
+      draw: () =>
+        pressCell(
+          'lines',
+          'workspace',
+          onGround(ansiHex(LINES_GROUND), [
+            { text: added, color: ansiHex(42), bold: true },
+            { text: ' ' },
+            { text: removed, color: ansiHex(203), bold: true },
+          ]),
+        ),
     })
   }
 
@@ -203,8 +262,12 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
       {row.map(cell => cell.draw())}
     </Box>
   ))
-  // One row is returned bare: a column around it can leave a blank row below on the terminal.
-  const [only] = rows
 
-  return rows.length === 1 && only ? only : <Box flexDirection="column">{rows}</Box>
+  // A dim rule above sets the band off from the transcript, as the prompt's border does below it.
+  return (
+    <Box flexDirection="column">
+      {Rule(ui, 'band-rule', room)}
+      {rows}
+    </Box>
+  )
 }

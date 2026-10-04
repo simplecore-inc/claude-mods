@@ -1,4 +1,4 @@
-// Copied from shared/ by scripts/sync-shared.mjs; edit shared/ and run the script.
+// Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
 import { WEEKDAYS } from './locale'
 import type { Locale } from './locale'
 

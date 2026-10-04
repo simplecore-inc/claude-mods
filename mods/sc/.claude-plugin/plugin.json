@@ -1,7 +1,14 @@
 {
   "name": "sc",
-  "version": "0.1.0",
+  "version": "0.3.0",
+  "license": "MIT",
   "description": "SimpleCORE Claude Mods: installs every mod and gives them the /sc: commands",
-  "author": { "name": "SimpleCORE", "email": "dev@simplecore.kr" },
-  "dependencies": ["sc-accounts", "sc-workspace"]
+  "author": {
+    "name": "SimpleCORE",
+    "email": "dev@simplecore.kr"
+  },
+  "dependencies": [
+    "sc-accounts",
+    "sc-workspace"
+  ]
 }

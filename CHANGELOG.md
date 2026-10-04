@@ -1,5 +1,3 @@
-<!-- Copied from the repository's CHANGELOG.md by scripts/sync.mjs; edit that file and run the script. -->
-
 # Changelog
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.

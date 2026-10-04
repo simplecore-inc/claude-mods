@@ -33,6 +33,11 @@ export function clockOf(at: number, now: number, locale: Locale): string {
   return resetClock(new Date(at).toISOString(), now, locale)
 }
 
+/** What changed since a checkpoint, as its row shows it; `…` while it is being counted. */
+export function sinceText(since: CheckpointRow['since'], m: Messages): string {
+  return since === undefined ? '…' : since.files === 0 ? m.noChangesSince : `${m.filesCount(since.files)} +${since.added} −${since.removed}`
+}
+
 export function CheckpointsTab(ui: ElementTable, model: CheckpointsModel, actions: CheckpointsActions) {
   const { Box, Text } = ui
   const { m } = model
@@ -40,9 +45,7 @@ export function CheckpointsTab(ui: ElementTable, model: CheckpointsModel, action
   const shown = model.checkpoints.slice(0, model.limit)
   const hidden = model.checkpoints.length - shown.length
   const clocks = shown.map(row => clockOf(row.at, model.now, model.locale))
-  const counts = shown.map(row =>
-    row.since === undefined ? '…' : row.since.files === 0 ? m.noChangesSince : `${m.filesCount(row.since.files)} +${row.since.added} −${row.since.removed}`,
-  )
+  const counts = shown.map(row => sinceText(row.since, m))
   // Every row shares one time width and one counts width, so the columns line up;
   // the label takes what is left and is cut to it, never wrapped.
   const clockWidth = Math.max(0, ...clocks.map(displayWidth))

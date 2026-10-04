@@ -24,3 +24,9 @@ test('both tables carry every message', async () => {
   expect(Object.keys(messagesFor('ko')).sort()).toEqual(Object.keys(messagesFor('en')).sort())
   expect(messagesFor('en').removed('a@example.com')).toBe('Removed the a@example.com account.')
 })
+
+test('the webhook is named in each language, and says when it sends', async () => {
+  expect(messagesFor('en').webhookTitle).toBe('Webhook')
+  expect(messagesFor('ko').webhookTitle).toBe('웹훅')
+  expect(messagesFor('ko').webhookWhen(30, 2)).toBe('상태(모델, effort, 컨텍스트, 사용량, 브랜치, 변경 줄 수 등)가 바뀔 때 보내고, 바뀌지 않아도 30초마다 보냅니다. 2초 안에 두 번 보내지는 않습니다.')
+})

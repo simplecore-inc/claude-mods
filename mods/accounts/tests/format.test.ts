@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { padCells, truncate } from '../hooks/shared/layout'
 import { AnthropicError, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
 import { messagesFor } from '../hooks/i18n'
+import { updatedText } from '../hooks/views/accounts'
 import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, untilReset } from '../hooks/format'
 
 const NOW = Date.parse('2026-10-04T05:00:00Z')
@@ -105,6 +106,22 @@ test('a 429 keeps the previous reading, marked stale, with no message', async ()
   const expired = failedReading(previous, new AnthropicError('x', 401), 99, messagesFor('en'))
   expect(expired.error).toBe(messagesFor('en').authExpired)
   expect(expired.isStale).toBeUndefined()
+  // The figures kept are the last lookup's, and so is their time.
+  expect(expired.fetchedAt).toBe(1)
+})
+
+test('updatedText says how long ago the figures were looked up, to the minute', async () => {
+  const m = messagesFor('en')
+  const reading = (fetchedAt: number) => ({ limits: [{ label: '5h', percent: 30 }], fetchedAt, source: 'lookup' as const })
+  // Under a minute it says nothing.
+  expect(updatedText(reading(0), 59_999, m)).toBe('')
+  expect(updatedText(reading(0), 60_000, m)).toBe('(updated 1m ago)')
+  expect(updatedText(reading(0), 12 * 60_000 + 59_000, m)).toBe('(updated 12m ago)')
+  expect(updatedText(reading(0), 75 * 60_000, m)).toBe('(updated 1h 15m ago)')
+  expect(updatedText(reading(0), 3 * 60_000, messagesFor('ko'))).toBe('(3m 전 갱신)')
+  // No figures yet: nothing to date.
+  expect(updatedText({ limits: [], fetchedAt: 0, error: 'x', source: 'lookup' }, 60_000, m)).toBe('')
+  expect(updatedText(undefined, 60_000, m)).toBe('')
 })
 
 test('figures no lookup produced are never kept', async () => {

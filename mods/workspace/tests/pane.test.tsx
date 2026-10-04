@@ -39,7 +39,6 @@ function seedState(on: On, extra: Record<string, unknown>): void {
       selected: { path: 'src/app.ts', text: 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n same', omitted: 0 },
       at: NOW,
     },
-    pendingConfirm: null,
     busy: null,
     clock: 0,
     dialog: null,
@@ -47,11 +46,12 @@ function seedState(on: On, extra: Record<string, unknown>): void {
     ...extra,
   }
   // A hook standing for the engine answers { value: <the event's result> }.
-  on('state.get', ($, e) => ({ value: { value: values[e.key], version: 1 } as never }))
+  // Another plugin's value is seeded as `<plugin>:<key>`.
+  on('state.get', ($, e) => ({ value: { value: values[`${e.plugin}:${e.key}`] ?? values[e.key], version: 1 } as never }))
   mock.clock(on, { now: NOW } as never)
 }
 
-function mountPane($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 100) {
+function mountPane($: Engine, surface: (typeof SURFACES)[number] | 'mobile', bodyColumns = 100) {
   return $.ui.mount({
     plugin: 'sc-workspace',
     surface,
@@ -88,10 +88,44 @@ test('the agents tab: a running agent can be stopped, a merged clean worktree re
   }
 })
 
-test('an armed stop asks for its confirming press', async ($, on) => {
-  seedState(on, { pendingConfirm: 'stop:a1' })
+test('destructive buttons are one press each: the dialog does the asking', async ($, on) => {
+  seedState(on, {})
   const ui = await mountPane($, 'terminal')
-  expect((await ui.find({ key: 'stop-a1-confirm' }))?.text).toBe('■?')
+  expect((await ui.find({ key: 'stop-a1' }))?.text).toBe('■')
+  expect(await ui.find({ key: 'stop-a1-confirm' })).toBeUndefined()
+  expect((await ui.find({ key: 'remove-worktree-/repo-merged' }))?.text).toBe('✕')
+  await ui.unmount()
+})
+
+for (const [kind, ref, title, confirm] of [
+  ['note', 'n1', 'Delete this note?', 'Delete'],
+  ['stop', 'a1', 'Stop reviewer?', 'Stop'],
+  ['worktree', '/repo-merged', 'Remove the worktree done?', 'Remove'],
+] as const) {
+  test(`the ${kind} dialog names what it acts on and its confirming button`, async ($, on) => {
+    seedState(on, { dialog: { kind, ref } })
+    const ui = await mountPane($, 'terminal')
+    expect(await ui.find({ type: 'Text', text: title })).toBeDefined()
+    expect((await ui.find({ key: 'dialog-confirm' }))?.text).toBe(confirm)
+    expect(await ui.find({ key: 'dialog-cancel' })).toBeDefined()
+    // The dialog takes the pane: no tab bar behind it.
+    expect(await ui.find({ key: 'tabs' })).toBeUndefined()
+    await ui.unmount()
+  })
+}
+
+test('a dialog about something already gone falls back to the tabs', async ($, on) => {
+  seedState(on, { dialog: { kind: 'note', ref: 'no-such-note' } })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'tabs' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('on mobile, with no field, the Notes tab says how to add a note', async ($, on) => {
+  seedState(on, { tab: 'notes' })
+  const ui = await mountPane($, 'mobile')
+  expect(await ui.find({ key: 'note-new' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /\/sc:workspace notes/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -264,21 +298,53 @@ test('splitPath cuts the name to its column and the folder to what is left', asy
   expect(splitPath('a/b/file.ts', 7, 12).folder).toBe('')
 })
 
-test('the diff tab offers the way back to the session start only when comparing with another checkpoint', async ($, on) => {
+test('the diff tab names its base as a button that opens the base dialog', async ($, on) => {
   seedState(on, { tab: 'diff' })
-  const atStart = await mountPane($, 'terminal')
-  expect(await atStart.find({ key: 'diff-reset' })).toBeUndefined()
-  await atStart.unmount()
+  // The engine's store beneath the plugin takes the dialog it is asked to show.
+  const written: unknown[] = []
+  on('state.set', ($, e) => {
+    if (e.key === 'dialog') written.push(e.value)
+    return { value: { isSet: true, version: 2 } as never }
+  })
+  const opened: { id: string; focus?: boolean }[] = []
+  on('ui.open', ($, e, next) => {
+    opened.push({ id: e.id, focus: e.focus })
+    return next(e)
+  })
+  for (const surface of [...SURFACES, 'mobile'] as const) {
+    const ui = await mountPane($, surface)
+    expect((await ui.find({ key: 'diff-base' }))?.text).toMatch(/Session start ▾$/)
+    await ui.unmount()
+  }
+  const ui = await mountPane($, 'terminal')
+  // The dialog is drawn in this pane, which takes the keys so Enter answers it.
+  await ui.press({ key: 'diff-base' })
+  expect(written).toContainEqual({ kind: 'base', ref: '' })
+  expect(opened).toEqual([{ id: 'sc-workspace', focus: true }])
+  await ui.unmount()
 })
 
-test('compared with a later checkpoint, the diff tab offers the way back to the session start', async ($, on) => {
+test('the base dialog lists the checkpoints with what changed since each, the base in use marked', async ($, on) => {
   seedState(on, {
     tab: 'diff',
+    dialog: { kind: 'base', ref: '' },
     diff: { base: { commit: 'c2', label: 'Fix the login bug', at: NOW - 60_000, isSessionStart: false }, files: [], at: NOW },
   })
-  const ui = await mountPane($, 'terminal')
-  expect((await ui.find({ key: 'diff-reset' }))?.text).toBe('⟲ Show since session start')
-  await ui.unmount()
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface)
+    expect(await ui.find({ type: 'Text', text: 'Compare the changes with' })).toBeDefined()
+    // The newest first, the labels in one column, the counts beside.
+    expect((await ui.find({ key: 'base-c2' }))?.text).toMatch(/Fix the login bug$/)
+    expect((await ui.find({ key: 'base-c1' }))?.text?.length).toBe((await ui.find({ key: 'base-c2' }))?.text?.length)
+    expect(await ui.find({ type: 'Text', text: '2 files +10 −3' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'no changes since' })).toBeDefined()
+    // The base in use holds the focus first, so Enter keeps it.
+    expect((await ui.find({ key: 'base-c2' }))?.props).toMatchObject({ autoFocus: true })
+    expect((await ui.find({ key: 'base-c1' }))?.props.autoFocus).toBeUndefined()
+    expect(await ui.find({ key: 'dialog-cancel' })).toBeDefined()
+    expect(await ui.find({ key: 'tabs' })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 test('Close closes the workspace pane itself', async ($, on) => {
@@ -342,5 +408,100 @@ test('the send switch sits right under the notes, below their card and above the
   expect(at('Done')).toBeGreaterThan(at('Send with prompts'))
   // The group is called Notes now, not To do.
   expect(await ui.find({ type: 'Text', text: 'To do' })).toBeUndefined()
+  await ui.unmount()
+})
+
+
+test('toggle opens the closed pane on the tab named, and closes the open one', async ($, on) => {
+  seedState(on, { tab: 'diff' })
+  let panes: { id: string; isShown?: boolean; isPlaced?: boolean }[] = []
+  on('ui.panes', () => ({ value: panes as never }))
+  const opened: string[] = []
+  const closed: string[] = []
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } as never }
+  })
+  on('ui.close', ($, e) => {
+    closed.push(e.id)
+    return { value: undefined as never }
+  })
+  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
+  // The command as the person types it at the prompt.
+  const typed = { command: 'sc:workspace', args: 'toggle diff', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as const
+  expect((await $.command.run(typed)).text).toBe('Opened the workspace on Diff.')
+  expect(opened).toEqual(['sc-workspace'])
+  panes = [{ id: 'sc-workspace', isShown: true, isPlaced: true }]
+  expect((await $.command.run(typed)).text).toBe('Closed the workspace.')
+  expect(closed).toEqual(['sc-workspace'])
+})
+
+test('pressing the accounts band\'s place or lines changed toggles the workspace, inside the press', {
+  plugins: [
+    {
+      name: 'sc-accounts',
+      // Stands for the accounts mod: its band, with the lines changed as a Button.
+      register: on => {
+        on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+          const { Button } = $.ui.resolve(e)
+          const { Box } = $.ui.resolve(e)
+          return (
+            <Box>
+              <Button key="band-place" label="▐" plain onPress={() => undefined} />
+              <Button key="band-place-1" label="claude-mods" plain onPress={() => undefined} />
+              <Button key="band-lines" label="+3 -1" plain onPress={() => undefined} />
+            </Box>
+          )
+        })
+      },
+    },
+  ],
+}, async ($, on) => {
+  seedState(on, { tab: 'diff' })
+  on('ui.panes', () => ({ value: [] as never }))
+  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
+  const opened: string[] = []
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } as never }
+  })
+  const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as never })
+  expect(await band.press({ key: 'band-lines' })).toEqual({ element: 'band-lines' })
+  expect(opened).toEqual(['sc-workspace'])
+  // Any Button of the cell, not only its first: here the directory's name.
+  expect(await band.press({ key: 'band-place-1' })).toEqual({ element: 'band-place-1' })
+  expect(opened).toEqual(['sc-workspace', 'sc-workspace'])
+  await band.unmount()
+})
+
+test('a workspace pane behind another pane\'s tab is opened afresh, in front, not closed', async ($, on) => {
+  seedState(on, { tab: 'diff' })
+  on('ui.panes', () => ({ value: [{ id: 'sc-workspace', isShown: false, isPlaced: true }] as never }))
+  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
+  const calls: string[] = []
+  on('ui.open', ($, e) => {
+    calls.push(`open ${e.id}`)
+    return { value: { isPlaced: true } as never }
+  })
+  on('ui.close', ($, e) => {
+    calls.push(`close ${e.id}`)
+    return { value: undefined as never }
+  })
+  const typed = { command: 'sc:workspace', args: 'toggle diff', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as const
+  expect((await $.command.run(typed)).text).toBe('Opened the workspace on Diff.')
+  expect(calls).toEqual(['close sc-workspace', 'open sc-workspace'])
+})
+
+test('alone, the pane\'s header names it: SimpleCORE Mods: Workspace', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Workspace' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('beside the accounts pane, the engine\'s tab names the pane and the header does not', async ($, on) => {
+  seedState(on, { 'sc-accounts:paneOpen': true })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /SimpleCORE Mods/ })).toBeUndefined()
   await ui.unmount()
 })

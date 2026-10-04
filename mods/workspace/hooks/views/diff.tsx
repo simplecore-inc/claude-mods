@@ -1,15 +1,14 @@
 import type { ElementTable } from 'claude-code'
 
-import type { DiffFile, DiffView } from '../../types'
+import type { CheckpointRow, DiffFile, DiffView } from '../../types'
 import type { Locale, Messages } from '../i18n'
-import { clockOf } from './checkpoints'
+import { clockOf, sinceText } from './checkpoints'
 import { Card, Empty, IconButton, Section, theme } from '../shared/kit'
 import { displayWidth, padCells, truncate } from '../shared/layout'
 
 export type DiffModel = {
   diff: DiffView | null
   repoError: string | null
-  isSessionBase: boolean
   now: number
   locale: Locale
   m: Messages
@@ -19,7 +18,8 @@ export type DiffModel = {
 export type DiffActions = {
   select: (path: string) => void
   closeFile: () => void
-  resetBase: () => void
+  /** Opens the dialog that picks the checkpoint the changes are compared with. */
+  chooseBase: () => void
 }
 
 const STATUS_MARK: Record<DiffFile['status'], { letter: string; color: string }> = {
@@ -46,6 +46,32 @@ export function splitPath(path: string, nameWidth: number, room: number): { name
 
 /** The widest a file name's column grows; longer names are cut. */
 const NAME_WIDTH = 28
+
+/** A base as the header and the base dialog name it: `time  label`. */
+export function baseLabel(base: Pick<DiffView['base'], 'at' | 'label'>, now: number, locale: Locale): string {
+  return `${clockOf(base.at, now, locale)}  ${truncate(base.label, 40)}`
+}
+
+/** A checkpoint offered as a base, with what changed since it when that has been counted. */
+export type BaseCandidate = DiffView['base'] & { since?: CheckpointRow['since'] }
+
+/**
+ * The base dialog's choices: each checkpoint as `time  label` with what changed
+ * since it beside, so two session starts tell apart; the base in use is marked
+ * and comes first when it is not among them.
+ */
+export function baseChoices(candidates: BaseCandidate[], current: DiffView['base'] | undefined, now: number, locale: Locale, m: Messages) {
+  const list: (BaseCandidate & { isCounted?: false })[] =
+    !current || candidates.some(one => one.commit === current.commit) ? candidates : [{ ...current, isCounted: false }, ...candidates]
+
+  return list.map(base => ({
+    key: `base-${base.commit}`,
+    label: baseLabel(base, now, locale),
+    detail: base.isCounted === false ? undefined : sinceText(base.since, m),
+    isCurrent: base.commit === current?.commit,
+    base: { commit: base.commit, label: base.label, at: base.at, isSessionStart: base.isSessionStart },
+  }))
+}
 
 /** Cells of the per-file change bar. */
 const CHANGE_BAR = 10
@@ -78,9 +104,17 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
 
   return (
     <Box key="diff" flexDirection="column">
-      <Box key="diff-head" justifyContent="space-between">
-        {Section(ui, 'diff-title', m.diffTitle, m.diffSince(diff.base.label, clockOf(diff.base.at, model.now, model.locale)))}
-        {!model.isSessionBase && IconButton(ui, 'diff-reset', m.sinceSessionStart, theme.accent, actions.resetBase)}
+      {/* What is compared stays in view; pressing it opens the dialog that picks another checkpoint. */}
+      <Box key="diff-head" gap={1}>
+        {Section(ui, 'diff-title', m.diffTitle)}
+        <Text dimColor>{m.diffBaseLabel}</Text>
+        <Button
+          key="diff-base"
+          label={`${baseLabel(diff.base, model.now, model.locale)} ▾`}
+          plain
+          hover={{ color: theme.accent, bold: true }}
+          onPress={actions.chooseBase}
+        />
       </Box>
       {diff.files.length === 0 && Empty(ui, 'diff-empty', [m.diffEmpty])}
       {diff.files.length > 0 && (

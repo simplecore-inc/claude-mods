@@ -31,7 +31,7 @@ export type AccountView = {
   savedAt: number
 }
 
-/** What the status line command forwards for this session (`~/.claude/cache/statusline/<session>.json`). */
+/** The session's status as the band draws it, read by the mod every two seconds. */
 export type StatusInfo = {
   updatedAt: number
   model: string
@@ -48,20 +48,50 @@ export type StatusInfo = {
   linesRemoved: number
 }
 
+/** One run of text in a band cell, in its own colours. */
+export type BandSpan = {
+  text: string
+  color?: string
+  backgroundColor?: string
+  bold?: boolean
+  dimColor?: boolean
+}
+
+/** What a band cell's label toggles: the accounts pane, or the workspace. */
+export type BandTarget = 'accounts' | 'workspace'
+
 declare module 'claude-code' {
   interface PluginState {
+    /** What this plugin reads of the workspace's state. */
+    'sc-workspace': {
+      paneOpen: boolean
+    }
     'sc-accounts': {
       accounts: AccountView[]
       usage: Record<string, UsageView>
       /** accountUuid of the login Claude Code currently uses, or null. */
       live: string | null
-      /** The action whose button awaits its confirming press, as `<kind>:<id>`. */
-      pendingConfirm: string | null
+      /** What the dialog shows: the account the remove dialog asks about, or the webhook settings; null with none open. */
+      dialog: { kind: 'remove'; uuid: string } | { kind: 'webhook' } | null
+      /**
+       * The webhook settings being edited in the dialog, or null: `token` is a
+       * new token typed (empty keeps the one kept), `hasToken` whether one is
+       * kept, `clearToken` whether saving removes it.
+       */
+      webhookDraft: { enabled: boolean; url: string; method: 'POST' | 'GET'; token: string; hasToken: boolean; clearToken: boolean } | null
+      /** The last webhook send, test or feed, or null before any. */
+      webhookLast: { at: number; status: number | null; error: string | null } | null
+      /** The key of the element holding the keyboard in the pane, or null. */
+      focused: string | null
       isRefreshing: boolean
       /** Whether the pane shows how to add an account. */
       isGuideOpen: boolean
-      /** The status line command's latest forward for this session, or null. */
+      /** Whether this plugin's pane is open, for the workspace to read: with both open, the engine draws tabs. */
+      paneOpen: boolean
+      /** The session's latest status, or null before the first read. */
       status: StatusInfo | null
+      /** `$.clock.now()` of the pane's last tick, so the ages it shows move on while it is open. */
+      tick: number
     }
   }
 }

@@ -1,7 +1,7 @@
-// Copied from shared/ by scripts/sync-shared.mjs; edit shared/ and run the script.
+// Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
 import type { ElementTable } from 'claude-code'
 
-import { barParts, displayWidth, severityColor } from './layout'
+import { barParts, displayWidth, padCells, severityColor } from './layout'
 
 /**
  * The pieces every tab of the pane is built from, so the tabs look like one
@@ -149,23 +149,17 @@ export function IconButton(ui: ElementTable, key: string, glyph: string, tone: s
 }
 
 /**
- * A destructive glyph button in two presses: the first arms it and shows
- * `glyph?` at full strength, the second runs it.
+ * A small filled button for a row's main action: its label on the main
+ * tile's tint, one cell of padding each side, lighter under the pointer.
  */
-export function ConfirmButton(
-  ui: ElementTable,
-  key: string,
-  glyph: string,
-  isArmed: boolean,
-  onArm: () => void,
-  onConfirm: () => void,
-) {
-  const { Button } = ui
-  if (isArmed) {
-    return <Button key={`${key}-confirm`} label={`${glyph}?`} plain hover={{ color: theme.danger, bold: true }} onPress={onConfirm} />
-  }
+export function TileButton(ui: ElementTable, key: string, label: string, onPress: () => void) {
+  const { Box, Button } = ui
 
-  return IconButton(ui, key, glyph, theme.danger, onArm)
+  return (
+    <Box key={`${key}-tile`} paddingX={1} backgroundColor={theme.tileMain} hover={{ backgroundColor: theme.tileHover }}>
+      <Button key={key} label={label} plain onPress={onPress} />
+    </Box>
+  )
 }
 
 /** A filled badge such as `active`. */
@@ -249,6 +243,32 @@ export function Tiles(ui: ElementTable, bodyColumns: number, tiles: Tile[], outl
 export type DialogLine = { text: string; tone?: 'danger' | 'ok' | 'muted' }
 
 /**
+ * The frame every dialog shares: the pane's usual header, then a round-bordered
+ * box holding the title, the body and the tiles.
+ */
+export function DialogFrame(
+  ui: ElementTable,
+  header: { brand: string; release: string | undefined },
+  borderColor: string,
+  title: string,
+  body: ReturnType<typeof Header>,
+  tiles: ReturnType<typeof Tiles>,
+) {
+  const { Box, Text } = ui
+
+  return (
+    <Box key="dialog-pane" flexDirection="column">
+      {Header(ui, header.brand, header.release)}
+      <Box key="dialog" flexDirection="column" marginTop={1} borderStyle="round" borderColor={borderColor} paddingX={1}>
+        <Text bold>{title}</Text>
+        {body}
+        {tiles}
+      </Box>
+    </Box>
+  )
+}
+
+/**
  * A confirmation dialog, drawn in a pane opened with `focus`, `closeOnEscape`
  * and `holdToasts`: the pane's usual header, then a bordered box holding the
  * title, the facts the choice rests on, and the two tiles, the confirming one
@@ -269,29 +289,80 @@ export function Dialog(
   const { Box, Text } = ui
   const color = (tone: DialogLine['tone']) => (tone === 'danger' ? theme.danger : tone === 'ok' ? theme.ok : undefined)
 
-  return (
-    <Box key="dialog-pane" flexDirection="column">
-      {Header(ui, header.brand, header.release)}
-      <Box key="dialog" flexDirection="column" marginTop={1} borderStyle="round" borderColor={theme.warn} paddingX={1}>
-        <Text bold>{title}</Text>
-        <Box key="dialog-lines" flexDirection="column" marginTop={1}>
-          {lines.map((line, index) => (
-            <Text key={`dialog-line-${index}`} color={color(line.tone)} dimColor={line.tone === 'muted'} wrap="wrap">
-              {line.text}
-            </Text>
-          ))}
+  return DialogFrame(
+    ui,
+    header,
+    theme.warn,
+    title,
+    <Box key="dialog-lines" flexDirection="column" marginTop={1}>
+      {lines.map((line, index) => (
+        <Text key={`dialog-line-${index}`} color={color(line.tone)} dimColor={line.tone === 'muted'} wrap="wrap">
+          {line.text}
+        </Text>
+      ))}
+    </Box>,
+    Tiles(
+      ui,
+      Math.max(20, bodyColumns - CARD_CHROME),
+      [
+        { key: 'dialog-confirm', label: confirm.label, isMain: true, isFocused: true, onPress: confirm.onPress },
+        { key: 'dialog-cancel', label: cancel.label, isDismiss: true, onPress: cancel.onPress },
+      ],
+      { focused: focused ?? 'dialog-confirm' },
+    ),
+  )
+}
+
+/** One choice of a choice dialog: what pressing it picks, and a dim detail beside it. */
+export type Choice = { key: string; label: string; detail?: string; isCurrent?: boolean; onPress: () => void }
+
+/**
+ * A dialog that asks for one of several choices, drawn like the confirmation
+ * dialog: the pane's header, then a bordered box holding the title, one row
+ * per choice and Cancel. The current choice is marked `●` and holds the focus
+ * first, so Enter keeps it; the labels share one column so the details line up.
+ * The border takes the accent colour: choosing changes nothing that cannot be
+ * chosen back.
+ */
+export function ChoiceDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: { brand: string; release: string | undefined },
+  title: string,
+  choices: Choice[],
+  cancel: { label: string; onPress: () => void },
+  /** The key of the element holding the keyboard, so the Cancel tile can show it. */
+  focused: string | null = null,
+) {
+  const { Box, Button, Text } = ui
+  const labelWidth = Math.max(0, ...choices.map(choice => displayWidth(choice.label)))
+
+  return DialogFrame(
+    ui,
+    header,
+    theme.accent,
+    title,
+    <Box key="dialog-choices" flexDirection="column" marginTop={1}>
+      {choices.map(choice => (
+        <Box key={`choice-${choice.key}`} gap={1}>
+          <Text color={choice.isCurrent ? theme.accent : undefined} dimColor={!choice.isCurrent}>
+            {choice.isCurrent ? '●' : '○'}
+          </Text>
+          <Button
+            key={choice.key}
+            label={padCells(choice.label, labelWidth)}
+            plain
+            hover={{ color: theme.accent, bold: true }}
+            {...(choice.isCurrent ? { autoFocus: true as const } : {})}
+            onPress={choice.onPress}
+          />
+          {choice.detail && <Text dimColor>{choice.detail}</Text>}
         </Box>
-        {Tiles(
-          ui,
-          Math.max(20, bodyColumns - CARD_CHROME),
-          [
-            { key: 'dialog-confirm', label: confirm.label, isMain: true, isFocused: true, onPress: confirm.onPress },
-            { key: 'dialog-cancel', label: cancel.label, isDismiss: true, onPress: cancel.onPress },
-          ],
-          { focused: focused ?? 'dialog-confirm' },
-        )}
-      </Box>
-    </Box>
+      ))}
+    </Box>,
+    Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), [{ key: 'dialog-cancel', label: cancel.label, isDismiss: true, onPress: cancel.onPress }], {
+      focused,
+    }),
   )
 }
 

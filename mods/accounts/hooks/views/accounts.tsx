@@ -1,9 +1,9 @@
 import type { ElementTable } from 'claude-code'
 
 import type { AccountView, LimitView, UsageView } from '../../types'
-import { bar, displayWidth, isSameReset, packRows, resetText } from '../format'
+import { bar, displayWidth, formatDuration, isSameReset, packRows, resetText } from '../format'
 import type { Locale, Messages } from '../i18n'
-import { Badge, Card, CARD_CHROME, CELL_GAP, ConfirmButton, Empty, Gauge, GAUGE_WIDTH, IconButton, theme } from '../shared/kit'
+import { Badge, Card, CARD_CHROME, CELL_GAP, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton } from '../shared/kit'
 
 export const STALE_MARK = '◷'
 
@@ -11,7 +11,6 @@ export type AccountsModel = {
   list: AccountView[]
   liveUuid: string | null
   readings: Record<string, UsageView>
-  pendingConfirm: string | null
   isGuideShown: boolean
   now: number
   locale: Locale
@@ -21,8 +20,19 @@ export type AccountsModel = {
 
 export type AccountsActions = {
   switchTo: (uuid: string) => void
-  arm: (key: string) => void
   remove: (uuid: string) => void
+}
+
+/**
+ * How long ago an account's figures were looked up, to the minute, in
+ * parentheses: `(updated 12m ago)`. Empty under a minute, and with no figures
+ * to date.
+ */
+export function updatedText(reading: UsageView | undefined, now: number, m: Messages): string {
+  if (!reading || reading.limits.length === 0) return ''
+  const age = now - reading.fetchedAt
+
+  return age < 60_000 ? '' : `(${m.updatedAgo(formatDuration(age))})`
 }
 
 /** Windows that reset together share one cell: their gauges side by side, one reset line. */
@@ -48,7 +58,7 @@ function limitCells(reading: UsageView | undefined, now: number, locale: Locale,
 
 export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: AccountsActions) {
   const { Box, Text } = ui
-  const { list, liveUuid, readings, pendingConfirm, now, locale, m } = model
+  const { list, liveUuid, readings, now, locale, m } = model
   // The card's border and padding take CARD_CHROME cells, the limits' indent two more.
   const room = Math.max(20, model.bodyColumns - CARD_CHROME - 2)
 
@@ -58,7 +68,7 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
       {list.map(one => {
         const reading = readings[one.uuid]
         const isLive = one.uuid === liveUuid
-        const removeKey = `remove:${one.uuid}`
+        const updated = updatedText(reading, now, m)
 
         return Card(
           ui,
@@ -74,18 +84,13 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
                 {isLive && <Text> </Text>}
                 {isLive && Badge(ui, `active-${one.uuid}`, m.active)}
                 {reading?.isStale && <Text color={theme.stale} dimColor>{` ${STALE_MARK}`}</Text>}
+                {updated !== '' && <Text dimColor>{`  ${updated}`}</Text>}
               </Text>
               {!isLive && (
-                <Box gap={2}>
-                  {IconButton(ui, `use-${one.uuid}`, '⇄', theme.accent, () => actions.switchTo(one.uuid))}
-                  {ConfirmButton(
-                    ui,
-                    `remove-${one.uuid}`,
-                    '✕',
-                    pendingConfirm === removeKey,
-                    () => actions.arm(removeKey),
-                    () => actions.remove(one.uuid),
-                  )}
+                <Box gap={2} alignItems="center">
+                  {TileButton(ui, `use-${one.uuid}`, m.switchButton, () => actions.switchTo(one.uuid))}
+                  {/* Removing asks in a dialog first. */}
+                  {IconButton(ui, `remove-${one.uuid}`, '✕', theme.danger, () => actions.remove(one.uuid))}
                 </Box>
               )}
             </Box>

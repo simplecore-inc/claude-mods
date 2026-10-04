@@ -4,7 +4,7 @@ import type { AgentRow, WorktreeRow } from '../../types'
 import { formatDuration } from '../shared/time'
 import { isRemovable, shortPath } from '../git'
 import type { Messages } from '../i18n'
-import { Badge, Card, ConfirmButton, Empty, Section, theme } from '../shared/kit'
+import { Badge, Card, Empty, IconButton, Section, theme } from '../shared/kit'
 
 export type AgentsModel = {
   agents: AgentRow[]
@@ -12,13 +12,11 @@ export type AgentsModel = {
   repoError: string | null
   root: string
   home: string | undefined
-  pendingConfirm: string | null
   now: number
   m: Messages
 }
 
 export type AgentsActions = {
-  arm: (key: string) => void
   stop: (agent: AgentRow) => void
   removeWorktree: (row: WorktreeRow) => void
 }
@@ -54,7 +52,6 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
         {model.agents.length === 0 && Empty(ui, 'agents-empty', [m.agentsEmpty])}
         {model.agents.map(agent => {
           const style = STATUS_STYLE[agent.status]
-          const stopKey = `stop:${agent.id}`
 
           return Card(
             ui,
@@ -68,14 +65,8 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
               </Text>
               {isStoppable(agent) && (
                 <Box flexShrink={0} marginLeft={1}>
-                  {ConfirmButton(
-                  ui,
-                  `stop-${agent.id}`,
-                  '■',
-                  model.pendingConfirm === stopKey,
-                  () => actions.arm(stopKey),
-                  () => actions.stop(agent),
-                  )}
+                  {/* Stopping asks in a dialog first. */}
+                  {IconButton(ui, `stop-${agent.id}`, '■', theme.danger, () => actions.stop(agent))}
                 </Box>
               )}
             </Box>,
@@ -87,7 +78,6 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
         {model.repoError && Empty(ui, 'worktrees-error', [model.repoError])}
         {!model.repoError && model.worktrees.length === 0 && Empty(ui, 'worktrees-empty', [m.loading])}
         {model.worktrees.map(row => {
-          const removeKey = `worktree:${row.path}`
           const facts = [
             row.changed > 0 ? m.changedFiles(row.changed) : row.changed === 0 ? m.clean : undefined,
             row.ahead !== undefined && row.ahead > 0 ? `↑${row.ahead}` : undefined,
@@ -111,14 +101,8 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
               </Text>
               {isRemovable(row) && (
                 <Box flexShrink={0} marginLeft={1}>
-                  {ConfirmButton(
-                  ui,
-                  `remove-worktree-${row.path}`,
-                  '✕',
-                  model.pendingConfirm === removeKey,
-                  () => actions.arm(removeKey),
-                  () => actions.removeWorktree(row),
-                  )}
+                  {/* Removing asks in a dialog first. */}
+                  {IconButton(ui, `remove-worktree-${row.path}`, '✕', theme.danger, () => actions.removeWorktree(row))}
                 </Box>
               )}
             </Box>,

@@ -1,4 +1,4 @@
-// Copied from shared/ by scripts/sync-shared.mjs; edit shared/ and run the script.
+// Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
 /** Terminal layout: gauges and their colours, cell widths, and packing cells into rows. */
 
 /** A thin bar of `width` cells, in its filled and remaining parts, so each takes its own color. */

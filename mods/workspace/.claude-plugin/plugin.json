@@ -1,8 +1,12 @@
 {
   "name": "sc-workspace",
-  "version": "0.1.0",
+  "version": "0.3.0",
+  "license": "MIT",
   "description": "A workspace pane for Claude Code: agents and worktrees, checkpoints, notes and changes in one tabbed pane",
-  "author": { "name": "SimpleCORE", "email": "dev@simplecore.kr" },
+  "author": {
+    "name": "SimpleCORE",
+    "email": "dev@simplecore.kr"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "checkpointEveryPrompt": {

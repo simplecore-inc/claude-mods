@@ -146,7 +146,8 @@ export function failedReading(previous: UsageView | undefined, error: unknown, n
     return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, isStale: true, source: 'lookup' }
   }
 
-  return { limits: kept?.limits ?? [], fetchedAt: now, error: describeFailure(error, m), source: 'lookup' }
+  // The limits kept are the last lookup's, and so is the time they were looked up.
+  return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, error: describeFailure(error, m), source: 'lookup' }
 }
 
 /** Whether a reading came from its own account's lookup, the one source trusted for its figures. */

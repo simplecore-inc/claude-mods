@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AccountView, UsageView } from '../types'
+import type { AccountView, BandTarget, StatusInfo, UsageView } from '../types'
 import {
   AnthropicError,
   PROFILE_URL,
@@ -19,10 +19,16 @@ import {
 } from './anthropic'
 import { describeLimits, pick, releaseDateOf } from './format'
 import { messagesFor, resolveLocale } from './i18n'
-import { Header, Tiles } from './shared/kit'
+import { Dialog, Header, Tiles } from './shared/kit'
+import { StatusCollector, transcriptPath } from './collector'
+import { changeKey, webhookRequest, webhookValues, DEFAULT_TEMPLATE_TEXT, parseConfig, renderTemplate, urlProblem, WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS } from './webhook'
+import type { WebhookConfig } from './webhook'
+import { displayModel, editedPath, lineChanges, settledEffort } from './status'
+import { WebhookDialog } from './views/webhook'
+import { resetClock } from './shared/time'
+import type { WebhookDraft } from './views/webhook'
 import { AccountsTab, STALE_MARK } from './views/accounts'
 import { StatusBand } from './views/band'
-import { parseStatusInfo } from './statusline'
 import { LIVE_POLL_MS, afterRateLimit, afterSuccess, isAutomaticLookupDue, readShared } from './schedule'
 import type { Locale, Messages } from './i18n'
 import {
@@ -44,12 +50,30 @@ import type { Platform } from './platform'
 const accounts = atom({ plugin: 'sc-accounts', key: 'accounts' } as const, [])
 const usage = atom({ plugin: 'sc-accounts', key: 'usage' } as const, {})
 const live = atom({ plugin: 'sc-accounts', key: 'live' } as const, null)
-const pendingConfirm = atom({ plugin: 'sc-accounts', key: 'pendingConfirm' } as const, null)
+const dialog = atom({ plugin: 'sc-accounts', key: 'dialog' } as const, null)
+const focused = atom({ plugin: 'sc-accounts', key: 'focused' } as const, null)
 const isRefreshing = atom({ plugin: 'sc-accounts', key: 'isRefreshing' } as const, false)
 const isGuideOpen = atom({ plugin: 'sc-accounts', key: 'isGuideOpen' } as const, false)
 const statusInfo = atom({ plugin: 'sc-accounts', key: 'status' } as const, null)
+const tick = atom({ plugin: 'sc-accounts', key: 'tick' } as const, 0)
+const webhookDraft = atom({ plugin: 'sc-accounts', key: 'webhookDraft' } as const, null)
+const webhookLast = atom({ plugin: 'sc-accounts', key: 'webhookLast' } as const, null)
+const paneOpen = atom({ plugin: 'sc-accounts', key: 'paneOpen' } as const, false)
+/** Whether the workspace's pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
+const workspacePaneOpen = { plugin: 'sc-workspace', key: 'paneOpen' } as const
 
 const PANE = 'account-switch'
+/** The workspace's command, which the band's lines changed toggle when no workspace hook takes the press. */
+const WORKSPACE_COMMAND = 'sc:workspace'
+/** The plugin's name, as `ui.press` names the plugin that drew a pressed Button. */
+const PLUGIN = 'sc-accounts'
+
+/** The band cell that toggles the accounts pane, the live account's name: `band-account`, then one Button per further coloured run. */
+const BAND_ACCOUNT = 'band-account'
+
+function isAccountCell(element: string): boolean {
+  return element === BAND_ACCOUNT || element.startsWith(`${BAND_ACCOUNT}-`)
+}
 /** The product name heading the pane; a name, so it is not translated. */
 const BRAND = 'SimpleCORE Mods'
 /** The `/config` row of the plugin's `showStatusBand` setting. */
@@ -73,9 +97,41 @@ let release: { version?: string; date?: string } = {}
 let turnStartedAt = 0
 /** The `$.store` key holding when any session last looked the live account up. */
 const LIVE_LOOKUP_KEY = 'liveLookupAt'
-/** How often the status file the status line command writes is read. */
+/** How often the session's status is read: the model, effort, branch, task and the rest the band shows. */
 const STATUS_POLL_MS = 2000
+/** The rows the webhook dialog takes whole: its fields, the variables and a preview of fourteen lines. */
+const WEBHOOK_DIALOG_ROWS = 56
+/** The `$.store` key of the webhook feed's settings, shared by every session on the machine. */
+const WEBHOOK_KEY = 'webhook'
+/** The `$.store` key of each session's lines added and removed, by session id. */
+const LINES_KEY = 'lines'
+/** How long after a /clear ends the old session the new one is taken up, once the engine has switched ids. */
+const CLEAR_SETTLE_MS = 300
+/** Lines counts kept this long after their session last changed them. */
+const LINES_KEPT_MS = 7 * 24 * 60 * 60 * 1000
+/** The largest file whose edit is counted; `$.fs.read` refuses bigger ones. */
+const MAX_COUNTED_FILE = 4 * 1024 * 1024
+/** How often the open pane redraws, so each account's "updated N min ago" is at most this late. */
+const PANE_TICK_MS = 10 * 1000
 let m: Messages = messagesFor(locale)
+
+/** What the session's status is read from, set at session start. */
+let collector: StatusCollector | null = null
+let sessionId = ''
+let sessionRoot = ''
+let homePath = ''
+let hostname: string | null = null
+let engineVersion: string | null = null
+/** The effort and model the latest main-loop request named; null before the first. */
+let requestEffort: string | null = null
+/** This session's lines added and removed by file-changing tool calls. */
+let lines = { added: 0, removed: 0 }
+/** The webhook feed's settings, as stored. */
+let webhook: WebhookConfig = parseConfig(undefined)
+/** What the feed last sent and when, so an unchanged status is not sent again until the heartbeat. */
+let lastFeed = { key: '', at: 0 }
+/** Whether a send is still waiting for its answer: a receiver that does not answer holds one send, never a queue. */
+let isFeedSending = false
 
 /** The `oauthAccount` object Claude Code keeps in its global config, kept whole. */
 type OauthAccount = {
@@ -216,6 +272,44 @@ async function deleteVault($: EngineInterface, uuid: string): Promise<void> {
   }
 }
 
+/** Where the webhook's bearer token is kept: its own keychain service, or an owner-only file. */
+const WEBHOOK_SERVICE = 'sc-webhook'
+const WEBHOOK_TOKEN_ACCOUNT = 'token'
+
+async function webhookTokenPath($: EngineInterface): Promise<string> {
+  return `${await claudeDirectory($)}/sc-accounts/webhook-token`
+}
+
+/** The webhook's bearer token, or null when none is kept. */
+async function readWebhookToken($: EngineInterface): Promise<string | null> {
+  const token =
+    (await platformOf($)).backend === 'keychain'
+      ? await findSecret($, WEBHOOK_SERVICE, WEBHOOK_TOKEN_ACCOUNT)
+      : await readFileIfPresent($, await webhookTokenPath($))
+
+  return token === null || token.trim() === '' ? null : token.trim()
+}
+
+/** Keeps the webhook's bearer token, through stdin as every secret here; never in a command line. */
+async function writeWebhookToken($: EngineInterface, token: string): Promise<void> {
+  if ((await platformOf($)).backend === 'keychain') await storeSecret($, WEBHOOK_SERVICE, WEBHOOK_TOKEN_ACCOUNT, token)
+  else await writePrivateFile($, await webhookTokenPath($), token)
+}
+
+async function deleteWebhookToken($: EngineInterface): Promise<void> {
+  const platform = await platformOf($)
+  if (platform.backend === 'file') {
+    const path = await webhookTokenPath($)
+    if (!(await $.fs.exists(path))) return
+    const { exitCode, stderr } = await $.process.run(deleteFileArgv(path, platform.isWindows), { timeoutMs: 5000 })
+    if (exitCode !== 0) throw new Error(`cannot delete ${path}: ${stderr.trim()}`)
+
+    return
+  }
+  const { exitCode, stderr } = await $.process.run(deleteArgv(WEBHOOK_SERVICE, WEBHOOK_TOKEN_ACCOUNT), { timeoutMs: 5000 })
+  if (exitCode !== 0 && exitCode !== ITEM_NOT_FOUND) throw new KeychainError(`security exited ${exitCode}: ${stderr.trim()}`)
+}
+
 // ── Claude Code's global config ───────────────────────────────────────────
 
 /** `HOME`, or `USERPROFILE` on Windows. */
@@ -352,13 +446,129 @@ async function syncLive($: EngineInterface): Promise<string | null> {
   return account.accountUuid
 }
 
-/** Takes the status line command's latest forward, when it changed. */
-async function readStatus($: EngineInterface, path: string): Promise<void> {
-  if (!(await $.fs.exists(path))) return
-  const next = parseStatusInfo(JSON.parse(await $.fs.read(path)))
-  if (next === null) return
+/** A file's text, or null when it is missing or too big to read. */
+async function readSmallFile($: EngineInterface, path: string): Promise<string | null> {
+  if (!(await $.fs.exists(path))) return null
+  const { size } = await $.fs.stat(path)
+
+  return size > MAX_COUNTED_FILE ? null : $.fs.read(path)
+}
+
+/** The template file of the webhook feed, under Claude Code's config directory. */
+async function templatePath($: EngineInterface): Promise<string> {
+  return `${await claudeDirectory($)}/sc-accounts/webhook.json`
+}
+
+/** The template's text, written from the default first when the file is missing. */
+async function readTemplate($: EngineInterface): Promise<string> {
+  const path = await templatePath($)
+  if (!(await $.fs.exists(path))) await $.fs.write(path, DEFAULT_TEMPLATE_TEXT)
+
+  return $.fs.read(path)
+}
+
+/** Reads the session's status: what the band draws and the webhook is sent. */
+async function collectStatus($: EngineInterface): Promise<StatusInfo | null> {
+  if (!collector) return null
+  const cwd = await $.session.cwd()
+  const modelId = await $.session.model()
+  const settings = (await $.settings.read()) as { effortLevel?: unknown; modelSettings?: unknown; fastMode?: unknown }
+  const branch = await collector.branch(cwd)
+  const now = await $.clock.now()
+  const [pr, task, ultracode] = await Promise.all([
+    collector.pullRequest(cwd, branch, now),
+    collector.task(homePath, sessionId),
+    collector.ultracode(transcriptPath(homePath, sessionRoot, sessionId)),
+  ])
+  const usageNow = await $.session.usage()
+  const next: StatusInfo = {
+    updatedAt: now,
+    model: displayModel(modelId),
+    effort: requestEffort ?? settledEffort(settings, modelId),
+    ultracode,
+    fast: settings.fastMode === true,
+    contextUsed: usageNow.context.percent ?? null,
+    task,
+    dir: cwd.split('/').filter(Boolean).pop() ?? cwd,
+    branch,
+    pr,
+    linesAdded: lines.added,
+    linesRemoved: lines.removed,
+  }
   const current = await read($, statusInfo)
-  if (current?.updatedAt !== next.updatedAt) await update($, statusInfo, () => next)
+  const { updatedAt: _was, ...currentRest } = current ?? { updatedAt: 0 }
+  const { updatedAt: _now, ...nextRest } = next
+  if (JSON.stringify(currentRest) !== JSON.stringify(nextRest)) await update($, statusInfo, () => next)
+  await feedWebhook($, next, modelId, cwd, usageNow.cost?.usd ?? null).catch((error: unknown) => debugLog($, error))
+
+  return next
+}
+
+/** The template filled with the session's status now, or why it cannot be. */
+async function webhookBody($: EngineInterface, status: StatusInfo, modelId: string, cwd: string, cost: number | null) {
+  const liveUuid = await read($, live)
+  const account = (await read($, accounts)).find(one => one.uuid === liveUuid)
+  const values = webhookValues({
+    session: sessionId,
+    now: await $.clock.now(),
+    hostname,
+    version: engineVersion,
+    cwd,
+    modelId,
+    status,
+    cost,
+    account: account?.email ?? null,
+    limits: liveUuid ? ((await read($, usage))[liveUuid]?.limits ?? []) : [],
+  })
+
+  return { values, rendered: renderTemplate(await readTemplate($), values) }
+}
+
+/** Sends the filled template by the config's method, with the token kept, and keeps how it went for the dialog. */
+async function postWebhook($: EngineInterface, config: WebhookConfig, rendered: { body: string; value: unknown }): Promise<void> {
+  const at = await $.clock.now()
+  try {
+    const { url, init } = webhookRequest(config, rendered, await readWebhookToken($))
+    const response = await $.http.fetch(url, init)
+    await update($, webhookLast, () => ({ at, status: response.status, error: null }))
+  } catch (error) {
+    await update($, webhookLast, () => ({ at, status: null, error: message(error) }))
+  }
+}
+
+/** Sends the status when the feed is on and something changed, or the heartbeat is due; never twice in two seconds. */
+async function feedWebhook($: EngineInterface, status: StatusInfo, modelId: string, cwd: string, cost: number | null): Promise<void> {
+  // Read each time, so a save in any session applies to every session.
+  webhook = parseConfig(await $.store.get(WEBHOOK_KEY))
+  if (!webhook.enabled || urlProblem(webhook.url) !== null) return
+  const now = await $.clock.now()
+  if (now - lastFeed.at < WEBHOOK_MIN_GAP_MS) return
+  const { values, rendered } = await webhookBody($, status, modelId, cwd, cost)
+  if (!('body' in rendered)) return
+  const key = changeKey(values)
+  if (key === lastFeed.key && now - lastFeed.at < WEBHOOK_HEARTBEAT_MS) return
+  if (isFeedSending) return
+  lastFeed = { key, at: now }
+  // Not awaited: the status reading never waits on the receiver.
+  isFeedSending = true
+  void postWebhook($, webhook, rendered).finally(() => {
+    isFeedSending = false
+  })
+}
+
+/** Adds an edit's lines to this session's count, kept in the store so a reload keeps it. */
+async function countLines($: EngineInterface, change: { added: number; removed: number }): Promise<void> {
+  if (change.added === 0 && change.removed === 0) return
+  lines = { added: lines.added + change.added, removed: lines.removed + change.removed }
+  const now = await $.clock.now()
+  const kept = Object.entries(((await $.store.get(LINES_KEY)) ?? {}) as Record<string, { added: number; removed: number; at: number }>).filter(
+    ([, entry]) => now - entry.at < LINES_KEPT_MS,
+  )
+  await $.store.set(LINES_KEY, { ...Object.fromEntries(kept), [sessionId]: { ...lines, at: now } })
+}
+
+function debugLog($: EngineInterface, error: unknown): void {
+  $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' })
 }
 
 /** The version `plugin.json` states and the date `CHANGELOG.md` gives that version. */
@@ -538,6 +748,163 @@ async function refresh($: EngineInterface, isAsked: boolean): Promise<void> {
   }
 }
 
+/**
+ * Opens the accounts pane, sized to its cards: the release line, five rows per
+ * account, then the footer below a blank line; or to `rows`, for a dialog
+ * taller than that. With `focus` it takes the keys, and Esc asks it to close.
+ */
+async function openPane($: EngineInterface, focus = false, rows?: number): Promise<void> {
+  const wanted = rows ?? Math.max(1, (await read($, accounts)).length) * 5 + 3
+  await $.ui.open({ id: PANE, title: paneName(), rows: wanted, ...(focus ? { focus: true, closeOnEscape: true } : {}) })
+  if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
+}
+
+/** The mod's name in the pane's title; a name, so it is never translated. */
+const MOD_NAME = 'Accounts'
+
+/** Closes the pane and says so at once: the engine raises no ui.close to the plugin that asked. */
+async function closePane($: EngineInterface): Promise<void> {
+  await $.ui.close({ id: PANE })
+  if (await read($, paneOpen)) await update($, paneOpen, () => false)
+}
+
+/** Brings `paneOpen` in line with the panes the engine holds, however the pane was closed. */
+async function syncPaneOpen($: EngineInterface): Promise<boolean> {
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+  if ((await read($, paneOpen)) !== isOpen) await update($, paneOpen, () => isOpen)
+
+  return isOpen
+}
+
+/** The pane's name, the brand and the mod's: the engine's tab label, and the header's when no tabs show. */
+function paneName(): string {
+  return `${BRAND}: ${MOD_NAME}`
+}
+
+/**
+ * What a band cell toggles: the accounts pane (the account's name), or the
+ * workspace on its Diff tab (the place and the lines changed), through the
+ * workspace's own command since another plugin's panes are not this one's.
+ */
+async function toggle($: EngineInterface, target: BandTarget): Promise<void> {
+  if (target === 'workspace') {
+    // Queued until the session is idle; not awaited, so the press returns at once.
+    void $.command.run({ command: WORKSPACE_COMMAND, args: 'toggle diff' }).catch((error: unknown) => $.ui.toast(message(error)))
+
+    return
+  }
+  const pane = (await $.ui.panes()).find(one => one.id === PANE)
+  // Only a pane in view closes. One behind another pane's tab, or waiting undrawn
+  // from an open nobody asked for, is opened afresh: in front, and placed.
+  if (pane?.isShown && pane.isPlaced) {
+    // A dialog left asking would greet the next open.
+    if ((await read($, dialog)) !== null) await update($, dialog, () => null)
+    await closePane($)
+
+    return
+  }
+  if (pane) await $.ui.close({ id: PANE })
+  await openPane($, true)
+}
+
+/** Opens the webhook dialog in the accounts pane, the settings as stored in its draft; the template file is written first when missing. */
+async function openWebhookDialog($: EngineInterface): Promise<void> {
+  const config = parseConfig(await $.store.get(WEBHOOK_KEY))
+  const hasToken = (await readWebhookToken($)) !== null
+  await readTemplate($)
+  await update($, webhookDraft, () => ({ ...config, token: '', hasToken, clearToken: false }))
+  await update($, dialog, () => ({ kind: 'webhook' }) as const)
+  await openPane($, true, WEBHOOK_DIALOG_ROWS)
+}
+
+/** The draft as a config, its URL trimmed. */
+function draftConfig(draft: WebhookDraft): WebhookConfig {
+  return { enabled: draft.enabled, url: draft.url.trim(), method: draft.method }
+}
+
+/** The status to fill the template with: the latest read, or one read now. */
+async function currentStatus($: EngineInterface): Promise<StatusInfo | null> {
+  return (await read($, statusInfo)) ?? (await collectStatus($))
+}
+
+/** What the dialog previews: the request the draft would make now, or why it makes none. */
+async function webhookPreview($: EngineInterface, draft: WebhookDraft): Promise<{ body: string } | { problem: string }> {
+  const status = await currentStatus($)
+  if (!status) return { problem: m.webhookTemplateMissing }
+  const { rendered } = await webhookBody($, status, await $.session.model(), await $.session.cwd(), (await $.session.usage()).cost?.usd ?? null)
+  if ('invalid' in rendered) return { problem: m.webhookTemplateInvalid(rendered.invalid) }
+  if ('unknown' in rendered) return { problem: m.webhookTemplateUnknown(rendered.unknown.join(', ')) }
+  const config = draftConfig(draft)
+  if (config.method === 'GET' && urlProblem(config.url) === null) return { body: `GET ${webhookRequest(config, rendered, null).url}` }
+
+  return { body: JSON.stringify(rendered.value, null, 2) }
+}
+
+/** Saves the draft: the settings to the store, the token to its secret store; refused with a reason when the URL cannot be sent to. */
+async function saveWebhook($: EngineInterface, draft: WebhookDraft): Promise<string> {
+  const config = draftConfig(draft)
+  if (config.enabled && urlProblem(config.url) !== null) throw new Error(urlMessage(urlProblem(config.url)) ?? '')
+  if (draft.clearToken) await deleteWebhookToken($)
+  if (draft.token.trim() !== '') await writeWebhookToken($, draft.token.trim())
+  await $.store.set(WEBHOOK_KEY, config)
+  webhook = config
+  lastFeed = { key: '', at: 0 }
+
+  return config.enabled ? m.webhookOn : m.webhookOff
+}
+
+/** Sends the draft once, the token typed or kept, and keeps how it went. */
+async function testWebhook($: EngineInterface, draft: WebhookDraft): Promise<void> {
+  const config = draftConfig(draft)
+  const problem = urlProblem(config.url)
+  if (problem !== null) throw new Error(urlMessage(problem) ?? '')
+  const status = await currentStatus($)
+  if (!status) throw new Error(m.webhookTemplateMissing)
+  const { rendered } = await webhookBody($, status, await $.session.model(), await $.session.cwd(), (await $.session.usage()).cost?.usd ?? null)
+  if (!('body' in rendered)) throw new Error('invalid' in rendered ? m.webhookTemplateInvalid(rendered.invalid) : m.webhookTemplateUnknown(rendered.unknown.join(', ')))
+  const typed = draft.token.trim()
+  const token = draft.clearToken ? null : typed !== '' ? typed : await readWebhookToken($)
+  const at = await $.clock.now()
+  try {
+    const { url, init } = webhookRequest(config, rendered, token)
+    const response = await $.http.fetch(url, init)
+    await update($, webhookLast, () => ({ at, status: response.status, error: null }))
+  } catch (error) {
+    await update($, webhookLast, () => ({ at, status: null, error: message(error) }))
+  }
+}
+
+function urlMessage(problem: ReturnType<typeof urlProblem>): string | null {
+  if (problem === 'empty') return m.webhookUrlEmpty
+  if (problem === 'scheme') return m.webhookUrlScheme
+  if (problem === 'invalid') return m.webhookUrlInvalid
+
+  return null
+}
+
+/**
+ * Fills the state a session draws from: the accounts, the live one and its
+ * usage, this session's lines changed, and whether the pane is open. Run at
+ * session start, and again after a /clear, whose new session starts with none.
+ */
+async function adoptSession($: EngineInterface): Promise<void> {
+  sessionId = await $.session.id()
+  const savedLines = (((await $.store.get(LINES_KEY)) ?? {}) as Record<string, { added: number; removed: number }>)[sessionId]
+  lines = { added: savedLines?.added ?? 0, removed: savedLines?.removed ?? 0 }
+  requestEffort = null
+  lastFeed = { key: '', at: 0 }
+  await loadIndex($)
+  // The machine's shared readings, under what this session already holds.
+  const shared = lookedUpOnly(await $.store.get(USAGE_KEY))
+  await update($, usage, map => lookedUpOnly({ ...shared, ...map }))
+  await syncPaneOpen($)
+  // A fresh shared lookup is reused rather than one of the session's own.
+  void syncLive($)
+    .then(() => refresh($, false))
+    .catch((error: unknown) => debugLog($, error))
+  void collectStatus($).catch((error: unknown) => debugLog($, error))
+}
+
 async function listText($: EngineInterface): Promise<string> {
   const list = await read($, accounts)
   const liveUuid = await read($, live)
@@ -568,18 +935,31 @@ export const register: Register = (on, options) => {
     m = messagesFor(locale)
     release = await readRelease($)
     $.ui.status(undefined)
-    await loadIndex($)
     // Readings no lookup produced (a figure copied from another login, a message an older build kept) go.
-    await update($, usage, map => lookedUpOnly(map))
     await $.store.set(USAGE_KEY, lookedUpOnly(await $.store.get(USAGE_KEY)))
-    // Starting (a reload too) reuses a fresh shared lookup instead of making one of its own.
-    void refresh($, false)
-    // The status line command forwards this session's status to a file; follow it.
-    const statusPath = `${await homeDirectory($)}/.claude/cache/statusline/${await $.session.id()}.json`
+    // The session's status: read every two seconds from the engine, git, gh and the transcript.
+    sessionRoot = await $.session.root()
+    homePath = await homeDirectory($)
+    engineVersion = (await $.session.version()).version
+    const host = await $.process.run(['hostname'], { timeoutMs: 2000 })
+    hostname = host.exitCode === 0 ? host.stdout.trim() : null
+    webhook = parseConfig(await $.store.get(WEBHOOK_KEY))
+    await adoptSession($)
+    collector = new StatusCollector({
+      run: (argv, init) => $.process.run(argv, init),
+      read: async path => ((await $.fs.exists(path)) ? $.fs.read(path) : null),
+      list: async path => ((await $.fs.exists(path)) ? $.fs.list(path) : []),
+      size: async path => ((await $.fs.exists(path)) ? (await $.fs.stat(path)).size : null),
+    })
     $.clock.every(STATUS_POLL_MS, () => {
-      void readStatus($, statusPath).catch((error: unknown) =>
-        $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' }),
-      )
+      void collectStatus($).catch((error: unknown) => debugLog($, error))
+    })
+    $.clock.every(PANE_TICK_MS, () => {
+      void (async () => {
+        if (!(await syncPaneOpen($))) return
+        const now = await $.clock.now()
+        await update($, tick, () => now)
+      })().catch((error: unknown) => $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' }))
     })
     $.clock.every(TICK_MS, () => {
       void syncLive($)
@@ -598,10 +978,44 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A /clear goes on in this process under a new session id, and no session.start fires for
+  // it: the new session's state is filled here, once the old one has ended.
+  on('session.end', async ($, e, next) => {
+    const result = await next(e)
+    if (e.reason === 'clear') {
+      $.clock.after(CLEAR_SETTLE_MS, () => {
+        void adoptSession($).catch((error: unknown) => debugLog($, error))
+      })
+    }
+
+    return result
+  })
+
   on('turn.start', async ($, e, next) => {
     turnStartedAt = await $.clock.now()
 
     return next(e)
+  })
+
+  // The effort each main-loop request asks for, as the engine settled it (a subagent's are its own).
+  on('turn.step', async function* ($, e, next) {
+    if (!e.agentId) requestEffort = e.effort === undefined ? null : String(e.effort)
+
+    return yield* next(e)
+  })
+
+  // Lines a file-changing tool call adds and removes: the file before and after, compared.
+  on('tool.call', async ($, e, next) => {
+    const path = editedPath(String(e.tool), e)
+    if (path === null) return next(e)
+    const before = await readSmallFile($, path).catch(() => undefined)
+    const result = await next(e)
+    if (before !== undefined && !('deny' in result) && !(result as { isError?: boolean }).isError) {
+      const after = await readSmallFile($, path).catch(() => undefined)
+      if (after !== undefined) await countLines($, lineChanges(before, after)).catch((error: unknown) => debugLog($, error))
+    }
+
+    return result
   })
 
   // Claude Code's own response reported its windows. They are the live account's
@@ -629,9 +1043,12 @@ export const register: Register = (on, options) => {
     const query = rest.join(' ')
     try {
       if (verb === '') {
-        // The release line, a five-line card per account, then the one-row footer below a blank line.
-        const rows = Math.max(1, (await read($, accounts)).length) * 5 + 3
-        await $.ui.open({ id: PANE, title: m.paneTitle, rows })
+        // The command opens the accounts themselves: a dialog left open is closed first.
+        if ((await read($, dialog)) !== null) {
+          await update($, dialog, () => null)
+          await update($, webhookDraft, () => null)
+        }
+        await openPane($)
 
         return { text: m.paneOpened }
       }
@@ -642,6 +1059,11 @@ export const register: Register = (on, options) => {
         return { text: await listText($) }
       }
       if (verb === 'add') return { text: m.addGuide }
+      if (verb === 'webhook') {
+        await openWebhookDialog($)
+
+        return { text: m.paneOpened }
+      }
       if (verb === 'band') {
         if (query !== 'on' && query !== 'off') return { text: m.bandUsage }
         const { deny } = await $.config.set({ key: BAND_SETTING, value: query === 'on' })
@@ -661,10 +1083,10 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // The status on the band above the prompt, left-aligned, in two lines: what the
-  // status line command forwards (context, model, effort, fast, task, place, PR),
-  // then the live account, its usage with the pane's thin bars, and the lines
-  // changed. Cells move to a new row when the band is too narrow.
+  // The status on the band above the prompt, left-aligned under a dim rule: the
+  // model, effort, fast mode and task, the live account, the context and usage
+  // gauges, the place and PR, and the lines changed. Cells move to a new row
+  // when the band is too narrow.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !isBandShown) return next(e)
     const status = await read($, statusInfo)
@@ -684,7 +1106,45 @@ export const register: Register = (on, options) => {
       now: await $.clock.now(),
       locale,
       room: Math.max(20, e.props.bodyColumns),
+      // The ui.press hook below takes the account, and the workspace's the place and the lines;
+      // this runs for a press neither took (the workspace without its hook).
+      onPress: target => {
+        void toggle($, target).catch((error: unknown) => $.ui.toast(message(error)))
+      },
     })
+  })
+
+  // A band press is taken here, inside the person's press, and toggled before the chain
+  // settles: a pane opened there counts as asked for and is placed at any width.
+  on('ui.press', async ($, e, next) => {
+    if (e.plugin !== PLUGIN || e.component !== 'AbovePrompt' || !isAccountCell(e.element)) return next(e)
+    await toggle($, 'accounts')
+
+    return { element: e.element }
+  })
+
+  // Where the keyboard is in the pane, so the dialog's outlined tiles can show it.
+  on('ui.focus', async ($, e, next) => {
+    const result = await next(e)
+    if (e.requestId === PANE) await update($, focused, () => e.element ?? null)
+
+    return result
+  })
+
+  // Esc (or the close mark) while the dialog asks cancels the dialog and keeps the pane.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind === 'person' && (await read($, dialog)) !== null) {
+      const wasWebhook = (await read($, dialog))?.kind === 'webhook'
+      await update($, dialog, () => null)
+      await update($, focused, () => null)
+      if (wasWebhook) await openPane($, true)
+
+      return { value: undefined }
+    }
+    const result = await next(e)
+    if (e.id === PANE && (await read($, paneOpen))) await update($, paneOpen, () => false)
+
+    return result
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -697,33 +1157,116 @@ export const register: Register = (on, options) => {
         .then(text => text && $.ui.toast(text))
         .catch((error: unknown) => $.ui.toast(message(error)))
     }
+    // The pane's name once: on the engine's tab while the workspace's pane is open beside it, else here.
+    const isTabbed = (await $.state.get(workspacePaneOpen)).value === true
+    const header = { brand: isTabbed ? '' : paneName(), release: release.version ? m.release(release.version, release.date) : undefined }
+    // A dialog takes the whole pane: the header, then the dialog.
+    const asked = await read($, dialog)
+    const dismiss = async () => {
+      await update($, dialog, () => null)
+      await update($, focused, () => null)
+    }
+    const draft = await read($, webhookDraft)
+    if (asked?.kind === 'webhook' && draft) {
+      const edit = (change: (current: WebhookDraft) => WebhookDraft) =>
+        act(async () => {
+          await update($, webhookDraft, current => (current ? change(current) : current))
+        })
+      const last = await read($, webhookLast)
+      const now = await $.clock.now()
+      const clock = (at: number) => resetClock(new Date(at).toISOString(), now, locale)
+      const config = draftConfig(draft)
+      const problem = config.enabled || config.url !== '' ? urlMessage(urlProblem(config.url)) : null
+
+      return WebhookDialog(
+        ui,
+        {
+          draft,
+          templatePath: (await templatePath($)).replace(homePath, '~'),
+          preview: await webhookPreview($, draft),
+          urlProblem: problem,
+          lastSend: last
+            ? last.error === null && last.status !== null
+              ? { text: m.webhookSent(clock(last.at), last.status), ok: last.status >= 200 && last.status < 300 }
+              : { text: m.webhookFailed(clock(last.at), last.error ?? `HTTP ${last.status}`), ok: false }
+            : null,
+          hasField: e.surface !== 'mobile',
+          m,
+          bodyColumns,
+          header,
+          focused: await read($, focused),
+        },
+        {
+          toggle: edit(current => ({ ...current, enabled: !current.enabled })),
+          toggleMethod: edit(current => ({ ...current, method: current.method === 'POST' ? 'GET' : 'POST' })),
+          setUrl: url => edit(current => ({ ...current, url }))(),
+          setToken: token => edit(current => ({ ...current, token, clearToken: false }))(),
+          clearToken: edit(current => ({ ...current, token: '', clearToken: true })),
+          test: act(() => testWebhook($, draft)),
+          // Back on the cards, the pane takes their height again.
+          save: act(async () => {
+            const text = await saveWebhook($, draft)
+            await update($, webhookDraft, () => null)
+            await dismiss()
+            await openPane($, true)
+
+            return text
+          }),
+          cancel: act(async () => {
+            await update($, webhookDraft, () => null)
+            await dismiss()
+            await openPane($, true)
+          }),
+        },
+      )
+    }
+    // A removal in question.
+    const target = asked?.kind === 'remove' ? (await read($, accounts)).find(one => one.uuid === asked.uuid) : undefined
+    if (asked && target) {
+
+      return Dialog(
+        ui,
+        bodyColumns,
+        header,
+        m.removeTitle(target.email),
+        [{ text: m.removeHint, tone: 'muted' }],
+        {
+          label: m.removeConfirm,
+          onPress: act(async () => {
+            await dismiss()
+
+            return remove($, target.uuid)
+          }),
+        },
+        { label: m.cancel, onPress: act(dismiss) },
+        await read($, focused),
+      )
+    }
 
     return (
       <Box flexDirection="column">
-        {Header(ui, BRAND, release.version ? m.release(release.version, release.date) : undefined)}
+        {Header(ui, header.brand, header.release)}
         {AccountsTab(
           ui,
           {
             list: await read($, accounts),
             liveUuid: await read($, live),
             readings: await read($, usage),
-            pendingConfirm: await read($, pendingConfirm),
             isGuideShown: await read($, isGuideOpen),
-            now: await $.clock.now(),
+            // Reading the tick subscribes the pane to it, so the ages move on while it is open.
+            now: Math.max(await $.clock.now(), await read($, tick)),
             locale,
             m,
             bodyColumns,
           },
           {
             switchTo: uuid => act(() => switchTo($, uuid))(),
-            arm: key => act(async () => {
-              await update($, pendingConfirm, () => key)
-            })(),
             remove: uuid =>
               act(async () => {
-                await update($, pendingConfirm, () => null)
-
-                return remove($, uuid)
+                await update($, dialog, () => ({ kind: 'remove', uuid }) as const)
+                // The pane takes the keys so Enter answers; Esc asks it to close, which the
+                // ui.close hook turns into Cancel.
+                await openPane($, true)
               })(),
           },
         )}
@@ -736,7 +1279,8 @@ export const register: Register = (on, options) => {
               await update($, isGuideOpen, shown => !shown)
             }),
           },
-          { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => $.ui.close({ id: PANE })) },
+          { key: 'webhook', label: m.webhookButton, onPress: act(() => openWebhookDialog($)) },
+          { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) },
         ])}
       </Box>
     )

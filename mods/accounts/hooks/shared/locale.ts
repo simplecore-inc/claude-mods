@@ -1,4 +1,4 @@
-// Copied from shared/ by scripts/sync-shared.mjs; edit shared/ and run the script.
+// Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
 export type Locale = 'en' | 'ko'
 
 /** Short weekday names, Sunday first, as `Date#getDay` counts. */

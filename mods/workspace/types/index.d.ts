@@ -64,6 +64,10 @@ export type DiffView = {
 
 declare module 'claude-code' {
   interface PluginState {
+    /** What this plugin reads of the accounts mod's state. */
+    'sc-accounts': {
+      paneOpen: boolean
+    }
     'sc-workspace': {
       tab: Tab
       agents: AgentRow[]
@@ -73,16 +77,16 @@ declare module 'claude-code' {
       checkpoints: CheckpointRow[]
       notes: Note[]
       diff: DiffView | null
-      /** The action whose button awaits its confirming press, as `<kind>:<id>`. */
-      pendingConfirm: string | null
       /** What the pane is busy with, as a short key, or null. */
       busy: string | null
       /** `$.clock.now()` of the last agents check while one is active: redraws their elapsed times. */
       clock: number
-      /** The confirmation the dialog pane asks for, or null with no dialog open. */
-      dialog: { kind: 'restore'; ref: string } | null
+      /** What the dialog asks: a confirmation, or the Diff tab's base; null with no dialog open. */
+      dialog: { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base'; ref: string } | null
       /** The key of the element holding the keyboard in the pane, or null. */
       focused: string | null
+      /** Whether this plugin's pane is open, for the accounts mod to read: with both open, the engine draws tabs. */
+      paneOpen: boolean
     }
   }
 }

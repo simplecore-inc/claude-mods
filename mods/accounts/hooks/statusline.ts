@@ -98,25 +98,3 @@ export function reviewMark(state: string | null): { text: string; fg: number } |
 
   return { text: state.replace(/_/g, ' '), fg: 245 }
 }
-
-/** The status file's contents, or null when it is not one the status line command wrote. */
-export function parseStatusInfo(value: unknown): StatusInfo | null {
-  const raw = (value ?? {}) as Partial<StatusInfo>
-  if (typeof raw.model !== 'string' || typeof raw.updatedAt !== 'number') return null
-  const pr = raw.pr && typeof raw.pr.number === 'number' ? { number: raw.pr.number, reviewState: raw.pr.reviewState ?? null } : null
-
-  return {
-    updatedAt: raw.updatedAt,
-    model: raw.model,
-    effort: typeof raw.effort === 'string' ? raw.effort : null,
-    ultracode: raw.ultracode === true,
-    fast: raw.fast === true,
-    contextUsed: typeof raw.contextUsed === 'number' ? raw.contextUsed : null,
-    task: typeof raw.task === 'string' ? raw.task : '',
-    dir: typeof raw.dir === 'string' ? raw.dir : '',
-    branch: typeof raw.branch === 'string' ? raw.branch : '',
-    pr,
-    linesAdded: typeof raw.linesAdded === 'number' ? raw.linesAdded : 0,
-    linesRemoved: typeof raw.linesRemoved === 'number' ? raw.linesRemoved : 0,
-  }
-}

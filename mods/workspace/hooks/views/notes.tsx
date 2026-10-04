@@ -2,12 +2,13 @@ import type { ElementTable } from 'claude-code'
 
 import type { Note } from '../../types'
 import type { Messages } from '../i18n'
-import { Card, ConfirmButton, Empty, IconButton, Section, theme, Toggle } from '../shared/kit'
+import { Card, Empty, IconButton, Section, theme, Toggle } from '../shared/kit'
 
 export type NotesModel = {
   notes: Note[]
   project: string
-  pendingConfirm: string | null
+  /** Whether the surface draws a text field (every surface but mobile). */
+  hasField: boolean
   /** Whether open notes go to Claude with every prompt (the `notesInContext` setting). */
   isSentWithPrompts: boolean
   m: Messages
@@ -17,13 +18,14 @@ export type NotesActions = {
   add: (text: string) => void
   toggle: (note: Note) => void
   insert: (note: Note) => void
-  arm: (key: string) => void
   remove: (note: Note) => void
   toggleSending: () => void
 }
 
 export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActions) {
   const { Box, Text } = ui
+  // The mobile app draws no field: there notes come from /sc:workspace notes <text>.
+  const Input = model.hasField && 'Input' in ui ? ui.Input : undefined
   const { m } = model
   const open = model.notes.filter(note => !note.isDone).length
   // Two groups, each newest first: what is left to do, then what is done.
@@ -31,7 +33,6 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
   const openNotes = model.notes.filter(note => !note.isDone).sort(newest)
   const doneNotes = model.notes.filter(note => note.isDone).sort(newest)
   const row = (note: Note) => {
-    const removeKey = `note:${note.id}`
 
     return (
       <Box key={`note-${note.id}`} justifyContent="space-between">
@@ -45,14 +46,8 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
         </Box>
         <Box gap={2} flexShrink={0}>
           {IconButton(ui, `insert-${note.id}`, '↵', theme.accent, () => actions.insert(note))}
-          {ConfirmButton(
-            ui,
-            `remove-note-${note.id}`,
-            '✕',
-            model.pendingConfirm === removeKey,
-            () => actions.arm(removeKey),
-            () => actions.remove(note),
-          )}
+          {/* Deleting asks in a dialog first. */}
+          {IconButton(ui, `remove-note-${note.id}`, '✕', theme.danger, () => actions.remove(note))}
         </Box>
       </Box>
     )
@@ -64,11 +59,11 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
       <Text key="notes-purpose" dimColor wrap="wrap">
         {m.notesPurpose}
       </Text>
-      {'Input' in ui ? (
+      {Input ? (
         // A bordered field in the accent colour, so it reads as the place to type.
         <Box key="notes-input" marginY={1} borderStyle="round" borderColor={theme.accent} paddingX={1} gap={1}>
           <Text color={theme.accent}>✎</Text>
-          <ui.Input key="note-new" placeholder={m.notePlaceholder} submitLabel={m.noteAdd} onSubmit={value => actions.add(value)} />
+          <Input key="note-new" placeholder={m.notePlaceholder} submitLabel={m.noteAdd} onSubmit={value => actions.add(value)} />
         </Box>
       ) : (
         <Text key="notes-no-input" dimColor>

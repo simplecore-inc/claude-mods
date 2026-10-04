@@ -2,15 +2,15 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRow, CheckpointRow, DiffView, Note, Tab, WorktreeRow } from '../types'
-import { checkpointRef, clipDiff, promptLabel } from './git'
+import { checkpointRef, clipDiff, promptLabel, shortPath } from './git'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
-import { Dialog, Header, Rule, TabBar, Tiles } from './shared/kit'
-import type { Tile } from './shared/kit'
+import { ChoiceDialog, Dialog, Header, Rule, TabBar, Tiles } from './shared/kit'
+import type { DialogLine, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
 import { AgentsTab } from './views/agents'
 import { CheckpointsTab, clockOf } from './views/checkpoints'
-import { DiffTab } from './views/diff'
+import { baseChoices, DiffTab } from './views/diff'
 import { NotesTab } from './views/notes'
 import {
   createCheckpoint,
@@ -22,6 +22,7 @@ import {
   removeWorktree,
   repoRoot,
   restoreCheckpoint,
+  snapshotIndexPath,
   snapshotTree,
 } from './workspace'
 import type { Run } from './workspace'
@@ -33,21 +34,49 @@ const repoError = atom({ plugin: 'sc-workspace', key: 'repoError' } as const, nu
 const checkpoints = atom({ plugin: 'sc-workspace', key: 'checkpoints' } as const, [])
 const notes = atom({ plugin: 'sc-workspace', key: 'notes' } as const, [])
 const diff = atom({ plugin: 'sc-workspace', key: 'diff' } as const, null)
-const pendingConfirm = atom({ plugin: 'sc-workspace', key: 'pendingConfirm' } as const, null)
 const busy = atom({ plugin: 'sc-workspace', key: 'busy' } as const, null)
 const clock = atom({ plugin: 'sc-workspace', key: 'clock' } as const, 0)
 const dialog = atom({ plugin: 'sc-workspace', key: 'dialog' } as const, null)
 const focused = atom({ plugin: 'sc-workspace', key: 'focused' } as const, null)
+const paneOpen = atom({ plugin: 'sc-workspace', key: 'paneOpen' } as const, false)
+/** Whether the accounts pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
+const accountsPaneOpen = { plugin: 'sc-accounts', key: 'paneOpen' } as const
 
 const PANE = 'sc-workspace'
 /** The product name heading the pane; a name, so it is not translated. */
 const BRAND = 'SimpleCORE Mods'
+
+/** The mod's name in the pane's title; a name, so it is never translated. */
+const MOD_NAME = 'Workspace'
+
+/** The pane's name, the brand and the mod's: the engine's tab label, and the header's when no tabs show. */
+function paneName(): string {
+  return `${BRAND}: ${MOD_NAME}`
+}
 const COMMAND = 'sc:workspace'
+/** How long after a /clear ends the old session the new one is taken up, once the engine has switched ids. */
+const CLEAR_SETTLE_MS = 300
+/**
+ * The accounts mod's band cells, the place and the lines changed, which toggle
+ * this pane on its Diff tab. A cell is a row of Buttons, one per coloured run:
+ * `band-place`, then `band-place-1`, `band-place-2` and on.
+ */
+const BAND = { plugin: 'sc-accounts', cells: ['band-place', 'band-lines'] }
+
+function isBandCell(element: string): boolean {
+  return BAND.cells.some(cell => element === cell || element.startsWith(`${cell}-`))
+}
 /** The `/config` row of the `notesInContext` setting. */
 const NOTES_SETTING = 'sc-workspace.notesInContext'
 const TABS: Tab[] = ['agents', 'checkpoints', 'notes', 'diff']
 const AGENTS_POLL_MS = 3000
 const WORKTREES_POLL_MS = 15_000
+/** How often the open pane's Checkpoints, Diff or Notes tab is brought up to date. */
+const LIVE_POLL_MS = 5000
+/** How long file-changing tool calls must settle before the tab is refreshed. */
+const LIVE_SETTLE_MS = 1500
+/** Tools whose calls may change files in the working tree. */
+const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
 /** Checkpoints kept per project; older ones lose their refs. */
 const CHECKPOINTS_KEPT = 50
 /** Checkpoints whose changes since are counted and shown. */
@@ -64,6 +93,10 @@ let home: string | undefined
 let sessionId = ''
 /** The checkpoint taken as the session started: the Diff tab's default base. */
 let baseline: CheckpointRow | undefined
+/** This session's snapshot index under the git directory, set as the session starts. */
+let snapshotIndex = ''
+/** Snapshots run one at a time: two at once in one index would trip git's index lock. */
+let snapshotChain: Promise<unknown> = Promise.resolve()
 /** When this session first saw each agent, for its elapsed time. */
 const firstSeen = new Map<string, number>()
 
@@ -78,6 +111,18 @@ function debug($: EngineInterface, error: unknown): void {
 /** The command runner the git helpers take, over `$.process.run`. */
 function runner($: EngineInterface): Run {
   return (argv, init) => $.process.run(argv, init)
+}
+
+/** A snapshot of the working tree, queued behind any snapshot this session is already taking. */
+function snapshot($: EngineInterface): Promise<string> {
+  const next = snapshotChain.then(() => {
+    if (!root) throw new Error(m.checkpointsNeedGit)
+
+    return snapshotTree(runner($), root, snapshotIndex)
+  })
+  snapshotChain = next.catch(() => undefined)
+
+  return next
 }
 
 const checkpointsKey = (project: string) => `checkpoints:${project}`
@@ -170,7 +215,7 @@ async function saveCheckpoints($: EngineInterface, list: CheckpointRow[]): Promi
 async function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], label: string, force = false): Promise<CheckpointRow | null> {
   if (!root) return null
   const run = runner($)
-  const tree = await snapshotTree(run, root)
+  const tree = await snapshot($)
   const list = await read($, checkpoints)
   if (!force && list[0]?.tree === tree) return null
   const own = list.filter(row => row.ref.includes(`/${sessionId}/`))
@@ -191,14 +236,13 @@ async function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], l
 async function refreshSince($: EngineInterface): Promise<void> {
   if (!root) return
   const run = runner($)
-  const tree = await snapshotTree(run, root)
+  const tree = await snapshot($)
   const list = await read($, checkpoints)
-  const counted = await Promise.all(
-    list.map(async (row, index) =>
-      index < CHECKPOINTS_SHOWN ? { ...row, since: await diffSummary(run, root ?? '', row.commit, tree) } : row,
-    ),
-  )
-  await update($, checkpoints, () => counted)
+  const counted = new Map<string, CheckpointRow['since']>()
+  for (const row of list.slice(0, CHECKPOINTS_SHOWN)) counted.set(row.ref, await diffSummary(run, root, row.commit, tree))
+  // Merged by ref into the list as it stands now: a checkpoint taken while these were counted stays.
+  const changed = list.some(row => counted.has(row.ref) && JSON.stringify(counted.get(row.ref)) !== JSON.stringify(row.since))
+  if (changed) await update($, checkpoints, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
 }
 
 async function restore($: EngineInterface, row: CheckpointRow): Promise<string> {
@@ -222,14 +266,19 @@ async function refreshDiff($: EngineInterface, base?: DiffView['base']): Promise
   const target = base ?? current?.base ?? (start ? { commit: start.commit, label: m.checkpointKind.session, at: start.at, isSessionStart: true } : undefined)
   if (!target) return
   const run = runner($)
-  const tree = await snapshotTree(run, root)
+  const tree = await snapshot($)
   const files = await diffFiles(run, root, target.commit, tree)
   const openPath = base ? undefined : current?.selected?.path
   let selected: DiffView['selected']
   if (openPath && files.some(file => file.path === openPath)) {
     selected = { path: openPath, ...clipDiff(await fileDiff(run, root, target.commit, tree, openPath), DIFF_LINES) }
   }
-  await update($, diff, () => ({ base: target, files, selected, at: Date.now() }))
+  const isSame =
+    current !== null &&
+    current.base.commit === target.commit &&
+    JSON.stringify(current.files) === JSON.stringify(files) &&
+    JSON.stringify(current.selected) === JSON.stringify(selected)
+  if (!isSame) await update($, diff, () => ({ base: target, files, selected, at: Date.now() }))
 }
 
 async function openFile($: EngineInterface, path: string): Promise<void> {
@@ -241,7 +290,7 @@ async function openFile($: EngineInterface, path: string): Promise<void> {
     return
   }
   const run = runner($)
-  const tree = await snapshotTree(run, root)
+  const tree = await snapshot($)
   const selected = { path, ...clipDiff(await fileDiff(run, root, current.base.commit, tree, path), DIFF_LINES) }
   await update($, diff, view => (view ? { ...view, selected } : view))
 }
@@ -262,17 +311,197 @@ async function addNote($: EngineInterface, text: string): Promise<string | void>
   return m.noteAdded(clean.length > 40 ? `${clean.slice(0, 39)}…` : clean)
 }
 
+/** Takes the project's notes as the store holds them, so a note another session wrote shows here. */
+async function reloadNotes($: EngineInterface): Promise<void> {
+  if (!root) return
+  const stored = await $.store.get(notesKey(root))
+  const list = Array.isArray(stored) ? (stored as Note[]) : []
+  if (JSON.stringify(list) !== JSON.stringify(await read($, notes))) await update($, notes, () => list)
+}
+
+/** Whether a refresh of the visible tab is running: a second one asked meanwhile is dropped. */
+let isLiveRefreshing = false
+/** The pending refresh after a burst of file-changing tool calls. */
+let liveRefreshTimer: { cancel: () => void } | undefined
+
+/** Brings the tab on screen up to date with the working tree and the store, when the pane is open. */
+async function refreshVisible($: EngineInterface): Promise<void> {
+  if (isLiveRefreshing || !(await isPaneOpen($))) return
+  isLiveRefreshing = true
+  try {
+    const active = await read($, tab)
+    if (active === 'checkpoints') await refreshSince($)
+    if (active === 'diff') await refreshDiff($)
+    if (active === 'notes') await reloadNotes($)
+  } finally {
+    isLiveRefreshing = false
+  }
+}
+
+/** Refreshes once a burst of file-changing tool calls has settled. */
+function scheduleLiveRefresh($: EngineInterface): void {
+  liveRefreshTimer?.cancel()
+  liveRefreshTimer = $.clock.after(LIVE_SETTLE_MS, () => {
+    liveRefreshTimer = undefined
+    void refreshVisible($).catch((error: unknown) => debug($, error))
+  })
+}
+
 async function openPane($: EngineInterface, next?: Tab): Promise<void> {
   if (next) await update($, tab, () => next)
-  await $.ui.open({ id: PANE, title: m.paneTitle, rows: 30 })
+  await $.ui.open({ id: PANE, title: paneName(), rows: 30 })
+  if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
   const active = await read($, tab)
   if (active === 'checkpoints') await refreshSince($)
   if (active === 'diff') await refreshDiff($)
+  if (active === 'notes') await reloadNotes($)
   if (active === 'agents') await Promise.all([refreshAgents($), refreshWorktrees($)])
+}
+
+/**
+ * Closes the pane when it is in view, else opens it on `next` (the tab last
+ * shown without one); says which. A pane behind another pane's tab, or waiting
+ * undrawn from an open nobody asked for, is opened afresh: in front, and placed.
+ */
+async function togglePane($: EngineInterface, next?: Tab): Promise<string> {
+  const pane = (await $.ui.panes()).find(one => one.id === PANE)
+  if (pane?.isShown && pane.isPlaced) {
+    // A dialog left asking would greet the next open.
+    if ((await read($, dialog)) !== null) await update($, dialog, () => null)
+    await closePane($)
+
+    return m.paneClosed
+  }
+  if (pane) await $.ui.close({ id: PANE })
+  await openPane($, next)
+
+  return m.paneOpened(tabLabel(next ?? (await read($, tab))))
+}
+
+/**
+ * Fills the state a session draws from: its id and snapshot index, the
+ * project's notes and checkpoints, a checkpoint of the session's start, and
+ * whether the pane is open. Run at session start, and again after a /clear,
+ * whose new session starts with none.
+ */
+async function adoptSession($: EngineInterface): Promise<void> {
+  sessionId = await $.session.id()
+  root = await repoRoot(runner($), await $.session.root())
+  snapshotIndex = root ? await snapshotIndexPath(runner($), root, sessionId) : ''
+  await update($, repoError, () => (root ? null : m.checkpointsNeedGit))
+  await update($, diff, () => null)
+  if (root) {
+    const storedNotes = await $.store.get(notesKey(root))
+    await update($, notes, () => (Array.isArray(storedNotes) ? (storedNotes as Note[]) : []))
+    const storedCheckpoints = await $.store.get(checkpointsKey(root))
+    await update($, checkpoints, () => (Array.isArray(storedCheckpoints) ? (storedCheckpoints as CheckpointRow[]) : []))
+    try {
+      baseline = (await takeCheckpoint($, 'session', m.checkpointKind.session)) ?? (await read($, checkpoints))[0]
+    } catch (error) {
+      debug($, error)
+    }
+  }
+  if (await syncPaneOpen($)) await refreshVisible($)
+}
+
+/** Closes the pane and says so at once: the engine raises no ui.close to the plugin that asked. */
+async function closePane($: EngineInterface): Promise<void> {
+  await $.ui.close({ id: PANE })
+  if (await read($, paneOpen)) await update($, paneOpen, () => false)
+}
+
+/** Brings `paneOpen` in line with the panes the engine holds, however the pane was closed. */
+async function syncPaneOpen($: EngineInterface): Promise<boolean> {
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+  if ((await read($, paneOpen)) !== isOpen) await update($, paneOpen, () => isOpen)
+
+  return isOpen
 }
 
 async function isPaneOpen($: EngineInterface): Promise<boolean> {
   return (await $.ui.panes()).some(pane => pane.id === PANE)
+}
+
+/**
+ * What the dialog asks about: one checkpoint to restore, note to delete, agent
+ * to stop or worktree to remove; or, for `base`, which checkpoint the Diff tab
+ * compares with (`ref` unused).
+ */
+type Dialog = { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base'; ref: string }
+
+/** The checkpoints the Diff tab's base is picked from: the newest shown, and the session's own start. */
+async function baseCandidates($: EngineInterface) {
+  const rows = await read($, checkpoints)
+  const start = baseline ?? rows.find(row => row.kind === 'session')
+  const listed = rows.slice(0, CHECKPOINTS_SHOWN)
+  if (start && !listed.some(row => row.commit === start.commit)) listed.push(start)
+
+  return listed.map(row => ({
+    commit: row.commit,
+    label: row.label || m.checkpointKind[row.kind],
+    at: row.at,
+    isSessionStart: row.kind === 'session',
+    since: row.since,
+  }))
+}
+
+/**
+ * What the dialog says for what it asks about, and what its confirming button
+ * runs; null when that thing is gone (the dialog then shows nothing to confirm).
+ */
+async function dialogSpec(
+  $: EngineInterface,
+  asked: Dialog,
+): Promise<{ title: string; lines: DialogLine[]; confirm: string; run: () => Promise<string | void> } | null> {
+  if (asked.kind === 'base') return null
+  const now = await $.clock.now()
+  if (asked.kind === 'restore') {
+    const row = (await read($, checkpoints)).find(one => one.ref === asked.ref)
+    if (!row) return null
+    const since = row.since
+
+    return {
+      title: m.restoreTitle(clockOf(row.at, now, locale)),
+      lines: [
+        { text: m.restoreFrom(row.label || m.checkpointKind[row.kind]) },
+        ...(since && since.files > 0 ? [{ text: m.restoreUndoes(m.filesCount(since.files), since.added, since.removed), tone: 'danger' as const }] : []),
+        { text: m.restoreUndoHint, tone: 'muted' as const },
+      ],
+      confirm: m.restoreConfirm,
+      run: () => restore($, row),
+    }
+  }
+  if (asked.kind === 'note') {
+    const note = (await read($, notes)).find(one => one.id === asked.ref)
+    if (!note) return null
+
+    return {
+      title: m.noteDeleteTitle,
+      lines: [{ text: `“${note.text}”` }, { text: m.cannotUndo, tone: 'muted' }],
+      confirm: m.deleteConfirm,
+      run: async () => saveNotes($, (await read($, notes)).filter(one => one.id !== note.id)),
+    }
+  }
+  if (asked.kind === 'stop') {
+    const agent = (await read($, agents)).find(one => one.id === asked.ref)
+    if (!agent) return null
+
+    return {
+      title: m.stopTitle(agent.label),
+      lines: [{ text: `${agent.type} · ${m.agentStatus[agent.status]}` }, { text: m.stopHint, tone: 'muted' }],
+      confirm: m.stopConfirm,
+      run: () => stopAgent($, agent),
+    }
+  }
+  const row = (await read($, worktrees)).find(one => one.path === asked.ref)
+  if (!row) return null
+
+  return {
+    title: m.worktreeTitle(row.branch ?? m.detached),
+    lines: [{ text: shortPath(row.path, root ?? '', home) }, { text: m.worktreeHint, tone: 'danger' }],
+    confirm: m.removeConfirm,
+    run: () => dropWorktree($, row),
+  }
 }
 
 // ── hooks ─────────────────────────────────────────────────────────────────
@@ -287,26 +516,19 @@ export const register: Register = (on, options) => {
     m = messagesFor(locale)
     release = await readRelease($)
     home = await $.env.get('HOME')
-    sessionId = await $.session.id()
-    root = await repoRoot(runner($), await $.session.root())
     // A pane an earlier build opened and this one no longer draws (the old dialog pane) would
     // stay on screen empty, past the workspace's own Close: close every pane but the workspace.
     for (const pane of await $.ui.panes()) {
       if (pane.id !== PANE) await $.ui.close({ id: pane.id }).catch((error: unknown) => debug($, error))
     }
-    await update($, repoError, () => (root ? null : m.checkpointsNeedGit))
-    if (root) {
-      const storedNotes = await $.store.get(notesKey(root))
-      await update($, notes, () => (Array.isArray(storedNotes) ? (storedNotes as Note[]) : []))
-      const storedCheckpoints = await $.store.get(checkpointsKey(root))
-      await update($, checkpoints, () => (Array.isArray(storedCheckpoints) ? (storedCheckpoints as CheckpointRow[]) : []))
-      try {
-        baseline = (await takeCheckpoint($, 'session', m.checkpointKind.session)) ?? (await read($, checkpoints))[0]
-      } catch (error) {
-        debug($, error)
-      }
-    }
+    await adoptSession($)
     $.clock.every(AGENTS_POLL_MS, () => void refreshAgents($).catch((error: unknown) => debug($, error)))
+    // Edits made outside the session (an editor, a script) show within a few seconds too.
+    $.clock.every(LIVE_POLL_MS, () => {
+      void syncPaneOpen($)
+        .then(() => refreshVisible($))
+        .catch((error: unknown) => debug($, error))
+    })
     $.clock.every(WORKTREES_POLL_MS, () => {
       void isPaneOpen($)
         .then(isOpen => (isOpen ? refreshWorktrees($) : undefined))
@@ -316,10 +538,49 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Esc (or the close mark) while the dialog asks cancels the dialog and keeps the pane.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind === 'person' && (await read($, dialog)) !== null) {
+      await update($, dialog, () => null)
+      await update($, focused, () => null)
+
+      return { value: undefined }
+    }
+    const result = await next(e)
+    if (e.id === PANE && (await read($, paneOpen))) await update($, paneOpen, () => false)
+
+    return result
+  })
+
+  // The session's snapshot index goes with it; checkpoints are commits and stay. A /clear goes
+  // on in this process under a new session id with no session.start: the new session is taken
+  // up here, once the old one has ended.
+  on('session.end', async ($, e, next) => {
+    if (snapshotIndex) {
+      await $.process.run(['rm', '-f', '--', snapshotIndex], { timeoutMs: 5000 }).catch((error: unknown) => debug($, error))
+    }
+    const result = await next(e)
+    if (e.reason === 'clear') {
+      $.clock.after(CLEAR_SETTLE_MS, () => {
+        void adoptSession($).catch((error: unknown) => debug($, error))
+      })
+    }
+
+    return result
+  })
+
   // Where the keyboard is in the pane, so outlined tiles can show it.
   on('ui.focus', async ($, e, next) => {
     const result = await next(e)
     if (e.requestId === PANE) await update($, focused, () => e.element ?? null)
+
+    return result
+  })
+
+  // A file-changing tool call, a subagent's too, refreshes the visible tab once the burst settles.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (FILE_TOOLS.has(String(e.tool))) scheduleLiveRefresh($)
 
     return result
   })
@@ -378,6 +639,12 @@ export const register: Register = (on, options) => {
 
         return { text: m.paneOpened(tabLabel(await read($, tab))) }
       }
+      // `toggle [tab]`: closes the pane when it is open, else opens it, on `tab` when one is named.
+      if (first === 'toggle') {
+        const named = rest[0] && (TABS as string[]).includes(rest[0]) ? (rest[0] as Tab) : undefined
+
+        return { text: await togglePane($, named) }
+      }
       if (first === 'notes' && rest.length > 0) {
         const added = await addNote($, rest.join(' '))
         await openPane($, 'notes')
@@ -396,38 +663,65 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // The accounts band's place or lines changed, pressed: toggled here, inside the person's
+  // press, so the pane counts as asked for and is placed at any width.
+  on('ui.press', async ($, e, next) => {
+    if (e.plugin !== BAND.plugin || e.component !== 'AbovePrompt' || !isBandCell(e.element)) return next(e)
+    await togglePane($, 'diff')
+
+    return { element: e.element }
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box } = ui
     const bodyColumns = e.props.bodyColumns ?? 60
-    const header = { brand: BRAND, release: release.version ? m.release(release.version, release.date) : undefined }
-    // A confirmation in progress takes the whole pane: the header, then the dialog.
+    // The pane's name once: on the engine's tab while the accounts pane is open beside it, else here.
+    const isTabbed = (await $.state.get(accountsPaneOpen)).value === true
+    const header = { brand: isTabbed ? '' : paneName(), release: release.version ? m.release(release.version, release.date) : undefined }
+    // A dialog in progress takes the whole pane: the header, then the dialog.
     const asked = await read($, dialog)
-    const askedRow = asked ? (await read($, checkpoints)).find(one => one.ref === asked.ref) : undefined
-    if (asked && askedRow) {
-      const since = askedRow.since
-      const dismiss = async () => {
-        await update($, dialog, () => null)
-        await update($, focused, () => null)
-      }
-      const at = clockOf(askedRow.at, await $.clock.now(), locale)
+    const dismiss = async () => {
+      await update($, dialog, () => null)
+      await update($, focused, () => null)
+    }
+    if (asked?.kind === 'base') {
+      const now = await $.clock.now()
+      const choices = baseChoices(await baseCandidates($), (await read($, diff))?.base, now, locale, m)
 
+      return ChoiceDialog(
+        ui,
+        bodyColumns,
+        header,
+        m.baseTitle,
+        choices.map(choice => ({
+          ...choice,
+          onPress: () => {
+            void (async () => {
+              await dismiss()
+              if (!choice.isCurrent) await refreshDiff($, choice.base)
+            })().catch((error: unknown) => $.ui.toast(message(error)))
+          },
+        })),
+        { label: m.cancel, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+        await read($, focused),
+      )
+    }
+    const spec = asked ? await dialogSpec($, asked) : null
+    if (asked && spec) {
       return Dialog(
         ui,
         bodyColumns,
         header,
-        m.restoreTitle(at),
-        [
-          { text: m.restoreFrom(askedRow.label || m.checkpointKind[askedRow.kind]) },
-          ...(since && since.files > 0 ? [{ text: m.restoreUndoes(m.filesCount(since.files), since.added, since.removed), tone: 'danger' as const }] : []),
-          { text: m.restoreUndoHint, tone: 'muted' as const },
-        ],
+        spec.title,
+        spec.lines,
         {
-          label: m.restoreConfirm,
+          label: spec.confirm,
           onPress: () => {
             void (async () => {
               await dismiss()
-              $.ui.toast(await restore($, askedRow))
+              const text = await spec.run()
+              if (text) $.ui.toast(text)
             })().catch((error: unknown) => $.ui.toast(message(error)))
           },
         },
@@ -438,7 +732,6 @@ export const register: Register = (on, options) => {
     const active = await read($, tab)
     // Reading the clock atom subscribes this pane to the agents' ticks.
     const now = Math.max(await $.clock.now(), await read($, clock))
-    const confirm = await read($, pendingConfirm)
     const working = await read($, busy)
     const act = (work: () => Promise<string | void>, label?: string) => () => {
       void (async () => {
@@ -451,28 +744,21 @@ export const register: Register = (on, options) => {
         }
       })().catch((error: unknown) => $.ui.toast(message(error)))
     }
-    const arm = (key: string) => act(async () => {
-      await update($, pendingConfirm, () => key)
-    })()
-    const confirmed = (work: () => Promise<string | void>) =>
+    // Whatever cannot be taken back asks in the dialog first.
+    const ask = (kind: Dialog['kind'], ref: string) =>
       act(async () => {
-        await update($, pendingConfirm, () => null)
-
-        return work()
+        await update($, dialog, () => ({ kind, ref }))
+        // The dialog is drawn in this pane, which takes the keys so Enter answers it; Esc
+        // asks the pane to close, which the ui.close hook turns into Cancel.
+        await $.ui.open({ id: PANE, title: paneName(), focus: true, closeOnEscape: true })
       })()
-    const select = (key: string) =>
-      act(async () => {
-        await update($, pendingConfirm, () => null)
-        await openPane($, key as Tab)
-      })()
+    const select = (key: string) => act(() => openPane($, key as Tab))()
 
     const agentRows = await read($, agents)
     const noteRows = await read($, notes)
     const checkpointRows = await read($, checkpoints)
     const diffView = await read($, diff)
     const error = await read($, repoError)
-    // The session's own start, or the newest one kept when this load took none.
-    const sessionStart = baseline ?? checkpointRows.find(row => row.kind === 'session')
     const activeAgents = agentRows.filter(agent => agent.status === 'running' || agent.status === 'pending' || agent.status === 'waiting').length
     const openNotes = noteRows.filter(note => !note.isDone).length
     const tabs = [
@@ -481,7 +767,7 @@ export const register: Register = (on, options) => {
       { key: 'notes', label: m.tabNotes, hotkey: '3', badge: openNotes > 0 ? `${openNotes}` : undefined },
       { key: 'diff', label: m.tabDiff, hotkey: '4', badge: diffView && diffView.files.length > 0 ? `${diffView.files.length}` : undefined },
     ]
-    const close: Tile = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => $.ui.close({ id: PANE })) }
+    const close: Tile = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) }
     const refreshTile = (work: () => Promise<void>): Tile => ({
       key: 'refresh',
       label: working === 'refresh' ? m.refreshingButton : m.refreshButton,
@@ -496,12 +782,7 @@ export const register: Register = (on, options) => {
         ui,
         { checkpoints: checkpointRows, repoError: error, now, locale, m, bodyColumns, limit: CHECKPOINTS_SHOWN },
         {
-          restore: row =>
-            act(async () => {
-              await update($, dialog, () => ({ kind: 'restore', ref: row.ref }))
-              // The dialog is drawn in this pane, which takes the keys so Enter answers it.
-              await $.ui.open({ id: PANE, title: m.paneTitle, focus: true })
-            })(),
+          restore: row => ask('restore', row.ref),
           compare: row =>
             act(async () => {
               await update($, tab, () => 'diff')
@@ -526,7 +807,7 @@ export const register: Register = (on, options) => {
     } else if (active === 'notes') {
       body = NotesTab(
         ui,
-        { notes: noteRows, project: projectName(), pendingConfirm: confirm, isSentWithPrompts: isNotesInContext, m },
+        { notes: noteRows, project: projectName(), isSentWithPrompts: isNotesInContext, hasField: e.surface !== 'mobile', m },
         {
           add: text => act(() => addNote($, text))(),
           toggle: note =>
@@ -540,8 +821,7 @@ export const register: Register = (on, options) => {
             act(async () => {
               await $.prompt.fill({ text: note.text, mode: 'insert' })
             })(),
-          arm,
-          remove: note => confirmed(() => saveNotes($, noteRows.filter(one => one.id !== note.id))),
+          remove: note => ask('note', note.id),
           // The setting's change reloads this module with the new value.
           toggleSending: () =>
             act(async () => {
@@ -565,8 +845,6 @@ export const register: Register = (on, options) => {
         {
           diff: diffView,
           repoError: error,
-          // A session-start base needs no way back to the session start, even one from before a reload.
-          isSessionBase: !diffView || !sessionStart || diffView.base.isSessionStart === true || diffView.base.commit === sessionStart.commit,
           now,
           locale,
           m,
@@ -578,21 +856,17 @@ export const register: Register = (on, options) => {
             act(async () => {
               await update($, diff, view => (view ? { ...view, selected: undefined } : view))
             })(),
-          resetBase: () =>
-            act(async () => {
-              if (sessionStart) await refreshDiff($, { commit: sessionStart.commit, label: m.checkpointKind.session, at: sessionStart.at, isSessionStart: true })
-            })(),
+          chooseBase: () => ask('base', ''),
         },
       )
       tiles = [refreshTile(() => refreshDiff($)), close]
     } else {
       body = AgentsTab(
         ui,
-        { agents: agentRows, worktrees: await read($, worktrees), repoError: error, root: root ?? '', home, pendingConfirm: confirm, now, m },
+        { agents: agentRows, worktrees: await read($, worktrees), repoError: error, root: root ?? '', home, now, m },
         {
-          arm,
-          stop: agent => confirmed(() => stopAgent($, agent)),
-          removeWorktree: row => confirmed(() => dropWorktree($, row)),
+          stop: agent => ask('stop', agent.id),
+          removeWorktree: row => ask('worktree', row.path),
         },
       )
       tiles = [refreshTile(async () => {
