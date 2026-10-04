@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { padCells, truncate } from '../hooks/shared/layout'
 import { AnthropicError, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
 import { messagesFor } from '../hooks/i18n'
 import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, untilReset } from '../hooks/format'
@@ -142,4 +143,12 @@ test('releaseDateOf reads the date of the heading for that version only', async 
   expect(releaseDateOf(changelog, '0.2.0')).toBe('2026-11-01')
   expect(releaseDateOf(changelog, '0.1')).toBeUndefined()
   expect(releaseDateOf('', '0.1.0')).toBeUndefined()
+})
+
+test('truncate and padCells count wide characters as two cells', async () => {
+  expect(truncate('abcdef', 4)).toBe('abc…')
+  expect(truncate('abc', 4)).toBe('abc')
+  expect(truncate('가나다라', 5)).toBe('가나…')
+  expect(padCells('가', 4)).toBe('가  ')
+  expect(padCells('ab', 4, 'start')).toBe('  ab')
 })

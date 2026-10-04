@@ -1,24 +1,7 @@
-export type Locale = 'en' | 'ko'
+import type { Locale } from './shared/locale'
 
-/** Short weekday names, Sunday first, as `Date#getDay` counts. */
-export const WEEKDAYS: Record<Locale, readonly string[]> = {
-  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-  ko: ['일', '월', '화', '수', '목', '금', '토'],
-}
-
-const KOREAN = /^(ko\b|ko[-_]|korean|한국어)/i
-
-/**
- * Picks the display language. Claude Code's `language` setting wins when set
- * (any language without a translation here falls back to English); without
- * it the POSIX locale variables decide, in their own precedence order.
- */
-export function resolveLocale(language: unknown, localeVariables: (string | undefined)[]): Locale {
-  if (typeof language === 'string' && language.trim() !== '') return KOREAN.test(language.trim()) ? 'ko' : 'en'
-  const locale = localeVariables.find(value => value !== undefined && value !== '')
-
-  return locale !== undefined && KOREAN.test(locale) ? 'ko' : 'en'
-}
+export { resolveLocale, WEEKDAYS } from './shared/locale'
+export type { Locale } from './shared/locale'
 
 const en = {
   addGuide: [
@@ -27,8 +10,8 @@ const en = {
     '2. Log in to the other account with `/login`.',
     '3. Within a minute of logging in, the new account is saved automatically.',
   ].join('\n'),
-  paneTitle: 'Claude accounts',
-  paneOpened: 'Opened the Claude accounts pane.',
+  paneTitle: 'SimpleCORE',
+  paneOpened: 'Opened the SimpleCORE workspace.',
   noAccounts: 'No saved accounts.',
   noAccountsYet: 'No saved accounts yet. Reading the current login.',
   noMatch: (query: string) => `No saved account matches "${query}".`,
@@ -64,8 +47,8 @@ const ko: Messages = {
     '2. `/login`으로 추가할 계정에 로그인해 주세요.',
     '3. 로그인을 마치면 1분 안에 새 계정을 자동으로 저장합니다.',
   ].join('\n'),
-  paneTitle: 'Claude 계정',
-  paneOpened: 'Claude 계정 창을 열었습니다.',
+  paneTitle: 'SimpleCORE',
+  paneOpened: 'SimpleCORE 작업 공간을 열었습니다.',
   noAccounts: '저장된 계정이 없습니다.',
   noAccountsYet: '저장된 계정이 없습니다. 지금 로그인 정보를 읽는 중입니다.',
   noMatch: query => `"${query}"에 해당하는 저장된 계정이 없습니다.`,

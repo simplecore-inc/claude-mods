@@ -1,11 +1,19 @@
 {
   "name": "simplecore-mods",
-  "owner": { "name": "SimpleCORE", "email": "dev@simplecore.kr" },
+  "owner": {
+    "name": "SimpleCORE",
+    "email": "dev@simplecore.kr"
+  },
   "plugins": [
     {
       "name": "sc",
-      "source": "./mods/account-switch",
-      "description": "Switch between saved Claude logins and watch every account's rate limits"
+      "source": "./mods/accounts",
+      "description": "Switch between saved Claude logins and watch every account's usage limits and the session status"
+    },
+    {
+      "name": "sc-workspace",
+      "source": "./mods/workspace",
+      "description": "A workspace pane: agents and worktrees, checkpoints, notes and changes in one tabbed pane"
     }
   ]
 }

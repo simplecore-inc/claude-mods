@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AccountView, LimitView, UsageView } from '../types'
+import type { AccountView, UsageView } from '../types'
 import {
   AnthropicError,
   PROFILE_URL,
@@ -17,10 +17,12 @@ import {
   refreshInit,
   usageInit,
 } from './anthropic'
-import { bar, barParts, describeLimits, releaseDateOf, displayWidth, isSameReset, packRows, pick, resetText, resetClock, severityColor } from './format'
+import { describeLimits, pick, releaseDateOf } from './format'
 import { messagesFor, resolveLocale } from './i18n'
-import { ansiHex, contextLabelColor, contextScaled, modelPill, parseStatusInfo, pillWidth, placePill, reviewMark } from './statusline'
-import type { PillSegment } from './statusline'
+import { Header, Tiles } from './shared/kit'
+import { AccountsTab, STALE_MARK } from './views/accounts'
+import { StatusBand } from './views/band'
+import { parseStatusInfo } from './statusline'
 import { LIVE_POLL_MS, afterRateLimit, afterSuccess, isAutomaticLookupDue, readShared } from './schedule'
 import type { Locale, Messages } from './i18n'
 import {
@@ -36,11 +38,13 @@ import {
   parseCredential,
 } from './keychain'
 import type { Credential } from './keychain'
+import { deleteFileArgv, detectPlatform, privateWriteArgv, vaultFilePath } from './platform'
+import type { Platform } from './platform'
 
 const accounts = atom({ plugin: 'sc', key: 'accounts' } as const, [])
 const usage = atom({ plugin: 'sc', key: 'usage' } as const, {})
 const live = atom({ plugin: 'sc', key: 'live' } as const, null)
-const pendingRemove = atom({ plugin: 'sc', key: 'pendingRemove' } as const, null)
+const pendingConfirm = atom({ plugin: 'sc', key: 'pendingConfirm' } as const, null)
 const isRefreshing = atom({ plugin: 'sc', key: 'isRefreshing' } as const, false)
 const isGuideOpen = atom({ plugin: 'sc', key: 'isGuideOpen' } as const, false)
 const statusInfo = atom({ plugin: 'sc', key: 'status' } as const, null)
@@ -50,23 +54,6 @@ const PANE = 'account-switch'
 const BRAND = 'SimpleCORE Mods'
 /** The `/config` row of the plugin's `showStatusBand` setting. */
 const BAND_SETTING = 'sc.showStatusBand'
-/** Cells between two limit columns in the pane. */
-const CELL_GAP = 3
-/** The xterm-256 ground behind the context gauge. */
-const CONTEXT_GROUND = 236
-/** Cells between two cells of the band's status line. */
-const STATUS_GAP = 1
-/** Cells a usage bar spans. */
-const BAR_WIDTH = 8
-/** Cells a card's border and horizontal padding take across. */
-const CARD_CHROME = 4
-/** The footer tiles' fill, and its fill under the pointer. */
-const TILE_BACKGROUND = '#262b33'
-/** Cells between two footer tiles. */
-const TILE_GAP = 1
-const TILE_HOVER_BACKGROUND = '#323946'
-/** Beside an account whose last lookup was rate limited, so its figures are the previous reading's. */
-const STALE_MARK = '◷'
 /** `commands/accounts.md` declares it; the plugin's name makes it `/sc:accounts`, and this hook answers it. */
 const COMMAND = 'sc:accounts'
 /** Every session wakes this often: to adopt a new login, and to share or take the automatic lookup. */
@@ -102,7 +89,52 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-// ── keychain ──────────────────────────────────────────────────────────────
+// ── credential storage ────────────────────────────────────────────────────
+
+/** Directory under Claude Code's config directory holding saved logins on the file backend. */
+const VAULT_DIRECTORY = 'account-switch'
+
+let platformCache: Platform | undefined
+
+async function platformOf($: EngineInterface): Promise<Platform> {
+  if (platformCache) return platformCache
+  const osVariable = await $.env.get('OS')
+  let kernelName: string | undefined
+  if (osVariable !== 'Windows_NT') {
+    try {
+      const uname = await $.process.run(['uname', '-s'], { timeoutMs: 5000 })
+      kernelName = uname.exitCode === 0 ? uname.stdout : undefined
+    } catch (error) {
+      $.ui.log(`account-switch: uname: ${message(error)}`, { to: 'debug' })
+    }
+  }
+  platformCache = detectPlatform(osVariable, kernelName)
+
+  return platformCache
+}
+
+/** Writes owner-only on POSIX; on Windows the profile directory's ACL already is. */
+async function writePrivateFile($: EngineInterface, path: string, text: string): Promise<void> {
+  if ((await platformOf($)).isWindows) {
+    await $.fs.write(path, text)
+
+    return
+  }
+  const { exitCode, stderr } = await $.process.run(privateWriteArgv(path), { stdin: text, timeoutMs: 5000 })
+  if (exitCode !== 0) throw new Error(`cannot write ${path}: ${stderr.trim()}`)
+}
+
+async function readFileIfPresent($: EngineInterface, path: string): Promise<string | null> {
+  return (await $.fs.exists(path)) ? $.fs.read(path) : null
+}
+
+async function liveCredentialPath($: EngineInterface): Promise<string> {
+  return `${await claudeDirectory($)}/.credentials.json`
+}
+
+async function vaultPath($: EngineInterface, account: string): Promise<string> {
+  return vaultFilePath(await claudeDirectory($), VAULT_DIRECTORY, account)
+}
 
 async function findSecret($: EngineInterface, service: string, account?: string): Promise<string | null> {
   const { exitCode, stdout, stderr } = await $.process.run(findArgv(service, account), { timeoutMs: 5000 })
@@ -120,13 +152,37 @@ async function storeSecret($: EngineInterface, service: string, account: string,
   if (exitCode !== 0) throw new KeychainError(`security exited ${exitCode}: ${stderr.trim()}`)
 }
 
-async function readCredential($: EngineInterface, service: string, account?: string): Promise<Credential | null> {
-  const text = await findSecret($, service, account)
+/** The login Claude Code uses now. */
+async function readLiveCredential($: EngineInterface): Promise<Credential | null> {
+  const text =
+    (await platformOf($)).backend === 'keychain'
+      ? await findSecret($, LIVE_SERVICE)
+      : await readFileIfPresent($, await liveCredentialPath($))
 
   return text === null ? null : parseCredential(text)
 }
 
+/** One saved account's login. */
+async function readVault($: EngineInterface, uuid: string): Promise<Credential | null> {
+  const text =
+    (await platformOf($)).backend === 'keychain'
+      ? await findSecret($, VAULT_SERVICE, uuid)
+      : await readFileIfPresent($, await vaultPath($, uuid))
+
+  return text === null ? null : parseCredential(text)
+}
+
+async function writeVault($: EngineInterface, uuid: string, credential: Credential): Promise<void> {
+  const text = JSON.stringify(credential)
+  if ((await platformOf($)).backend === 'keychain') {
+    await storeSecret($, VAULT_SERVICE, uuid, text)
+  } else {
+    await writePrivateFile($, await vaultPath($, uuid), text)
+  }
+}
+
 async function writeLiveCredential($: EngineInterface, credential: Credential): Promise<void> {
+  if ((await platformOf($)).backend === 'file') return
   const attributes = await $.process.run(attributesArgv(LIVE_SERVICE), { timeoutMs: 5000 })
   const account = parseAccountName(attributes.stdout) ?? (await $.env.get('USER'))
   if (!account) throw new KeychainError('cannot tell which keychain account Claude Code uses')
@@ -134,22 +190,26 @@ async function writeLiveCredential($: EngineInterface, credential: Credential): 
 }
 
 /**
- * Mirrors the credential into Claude Code's plaintext fallback file when that
- * file exists. Claude Code compares the file's mtime before each token check,
- * so the write is what makes a running session drop its cached login at once.
+ * Writes `.credentials.json`: the login itself on the file backend, and on
+ * macOS the plaintext fallback, only when that file exists. Claude Code
+ * compares the file's mtime before each token check, so the write is what
+ * makes a running session drop its cached login at once.
  */
 async function writeLiveCredentialFile($: EngineInterface, credential: Credential): Promise<void> {
-  const path = `${await claudeDirectory($)}/.credentials.json`
-  if (!(await $.fs.exists(path))) return
-  // umask keeps the file owner-only; the secret travels on stdin.
-  const { exitCode, stderr } = await $.process.run(['/bin/sh', '-c', 'umask 077 && cat > "$0"', path], {
-    stdin: JSON.stringify(credential),
-    timeoutMs: 5000,
-  })
-  if (exitCode !== 0) throw new Error(`cannot write ${path}: ${stderr.trim()}`)
+  const path = await liveCredentialPath($)
+  if ((await platformOf($)).backend === 'keychain' && !(await $.fs.exists(path))) return
+  await writePrivateFile($, path, JSON.stringify(credential))
 }
 
 async function deleteVault($: EngineInterface, uuid: string): Promise<void> {
+  const platform = await platformOf($)
+  if (platform.backend === 'file') {
+    const path = await vaultPath($, uuid)
+    const { exitCode, stderr } = await $.process.run(deleteFileArgv(path, platform.isWindows), { timeoutMs: 5000 })
+    if (exitCode !== 0) throw new Error(`cannot delete ${path}: ${stderr.trim()}`)
+
+    return
+  }
   const { exitCode, stderr } = await $.process.run(deleteArgv(VAULT_SERVICE, uuid), { timeoutMs: 5000 })
   if (exitCode !== 0 && exitCode !== ITEM_NOT_FOUND) {
     throw new KeychainError(`security exited ${exitCode}: ${stderr.trim()}`)
@@ -158,11 +218,12 @@ async function deleteVault($: EngineInterface, uuid: string): Promise<void> {
 
 // ── Claude Code's global config ───────────────────────────────────────────
 
+/** `HOME`, or `USERPROFILE` on Windows. */
 async function homeDirectory($: EngineInterface): Promise<string> {
-  const home = await $.env.get('HOME')
-  if (!home) throw new Error('HOME is not set')
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+  if (!home) throw new Error('neither HOME nor USERPROFILE is set')
 
-  return home
+  return home.replaceAll('\\', '/')
 }
 
 /** Claude Code's config directory, which holds `.credentials.json`. */
@@ -190,14 +251,53 @@ async function writeLiveOauthAccount($: EngineInterface, account: OauthAccount):
 
 // ── accounts ──────────────────────────────────────────────────────────────
 
-async function saveIndex($: EngineInterface, list: AccountView[]): Promise<void> {
+/**
+ * The saved accounts: the list the store holds, with every account it lost
+ * put back. An account is saved when both its details (`oauthAccount:<id>`)
+ * and its credential are kept, so a session running an older build that wrote
+ * back a shorter list cannot drop one; removing an account deletes both.
+ */
+async function storedIndex($: EngineInterface): Promise<AccountView[]> {
+  const stored = await $.store.get(INDEX_KEY)
+  const list = Array.isArray(stored) ? (stored as AccountView[]) : []
+  const listed = new Set(list.map(one => one.uuid))
+  const lost: AccountView[] = []
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('oauthAccount:')) continue
+    const uuid = key.slice('oauthAccount:'.length)
+    if (listed.has(uuid)) continue
+    const account = (await $.store.get(key)) as OauthAccount | undefined
+    const credential = account ? await readVault($, uuid).catch(() => null) : null
+    if (!account || !credential) continue
+    lost.push({
+      uuid,
+      email: account.emailAddress,
+      organizationName: account.organizationName,
+      subscriptionType: credential.claudeAiOauth.subscriptionType,
+      savedAt: 0,
+    })
+  }
+
+  return [...list, ...lost.sort((a, b) => a.email.localeCompare(b.email))]
+}
+
+/**
+ * Changes the saved accounts. The change is applied to the list the store
+ * holds now, never to this session's copy: a session that has not loaded the
+ * list yet, or holds an older one, would otherwise write back only the
+ * accounts it knows and drop the rest.
+ */
+async function changeIndex($: EngineInterface, change: (list: AccountView[]) => AccountView[]): Promise<AccountView[]> {
+  const list = change(await storedIndex($))
   await $.store.set(INDEX_KEY, list)
   await update($, accounts, () => list)
+
+  return list
 }
 
 async function loadIndex($: EngineInterface): Promise<void> {
-  const stored = await $.store.get(INDEX_KEY)
-  await update($, accounts, () => (Array.isArray(stored) ? (stored as AccountView[]) : []))
+  const list = await storedIndex($)
+  await update($, accounts, () => list)
 }
 
 /**
@@ -207,7 +307,7 @@ async function loadIndex($: EngineInterface): Promise<void> {
  * @returns the live account's uuid, or null with no Claude login
  */
 async function syncLive($: EngineInterface): Promise<string | null> {
-  const [configured, credential] = await Promise.all([liveOauthAccount($), readCredential($, LIVE_SERVICE)])
+  const [configured, credential] = await Promise.all([liveOauthAccount($), readLiveCredential($)])
   if (configured === null || credential === null) {
     await update($, live, () => null)
 
@@ -215,7 +315,7 @@ async function syncLive($: EngineInterface): Promise<string | null> {
   }
 
   let account = configured
-  const stored = await readCredential($, VAULT_SERVICE, configured.accountUuid)
+  const stored = await readVault($, configured.accountUuid)
   if (JSON.stringify(stored) !== JSON.stringify(credential)) {
     // The token changed: ask whose it is. During a login the config and the
     // keychain can name different accounts for a moment, and filing a token
@@ -226,23 +326,28 @@ async function syncLive($: EngineInterface): Promise<string | null> {
       owner.accountUuid === configured.accountUuid
         ? configured
         : (((await $.store.get(oauthAccountKey(owner.accountUuid))) as OauthAccount | undefined) ?? owner)
-    await storeSecret($, VAULT_SERVICE, account.accountUuid, JSON.stringify(credential))
+    await writeVault($, account.accountUuid, credential)
   }
   if ((await read($, live)) !== account.accountUuid) liveChangedAt = await $.clock.now()
   await update($, live, () => account.accountUuid)
   await $.store.set(oauthAccountKey(account.accountUuid), account)
 
-  const list = await read($, accounts)
-  const view: AccountView = {
-    uuid: account.accountUuid,
-    email: account.emailAddress,
-    organizationName: account.organizationName,
-    subscriptionType: credential.claudeAiOauth.subscriptionType,
-    savedAt: list.find(one => one.uuid === account.accountUuid)?.savedAt ?? (await $.clock.now()),
-  }
-  const isKnown = list.some(one => one.uuid === view.uuid)
-  if (!isKnown) $.ui.toast(`account-switch: ${m.saved(view.email)}`)
-  await saveIndex($, isKnown ? list.map(one => (one.uuid === view.uuid ? view : one)) : [...list, view])
+  const now = await $.clock.now()
+  let isNew = false
+  await changeIndex($, list => {
+    const known = list.find(one => one.uuid === account.accountUuid)
+    const view: AccountView = {
+      uuid: account.accountUuid,
+      email: account.emailAddress,
+      organizationName: account.organizationName,
+      subscriptionType: credential.claudeAiOauth.subscriptionType,
+      savedAt: known?.savedAt ?? now,
+    }
+    isNew = known === undefined
+
+    return known ? list.map(one => (one.uuid === view.uuid ? view : one)) : [...list, view]
+  })
+  if (isNew) $.ui.toast(m.saved(account.emailAddress))
 
   return account.accountUuid
 }
@@ -293,7 +398,7 @@ async function ensureFresh($: EngineInterface, uuid: string, credential: Credent
   const response = await $.http.fetch(TOKEN_URL, refreshInit(credential))
   if (!response.ok) throw new AnthropicError(`token refresh answered ${response.status}`, response.status)
   const fresh = applyRefresh(credential, response.text, now)
-  await storeSecret($, VAULT_SERVICE, uuid, JSON.stringify(fresh))
+  await writeVault($, uuid, fresh)
 
   return fresh
 }
@@ -305,7 +410,7 @@ async function switchTo($: EngineInterface, uuid: string): Promise<string> {
 
   // File the outgoing login first: Claude Code may have rotated its tokens.
   await syncLive($)
-  const credential = await readCredential($, VAULT_SERVICE, uuid)
+  const credential = await readVault($, uuid)
   const account = (await $.store.get(oauthAccountKey(uuid))) as OauthAccount | undefined
   if (credential === null || !account) throw new Error(`${target.email}: ${m.noStoredLogin}`)
 
@@ -326,7 +431,7 @@ async function remove($: EngineInterface, uuid: string): Promise<string> {
   if ((await read($, live)) === uuid) throw new Error(m.cannotRemoveLive)
   await deleteVault($, uuid)
   await $.store.delete(oauthAccountKey(uuid))
-  await saveIndex($, (await read($, accounts)).filter(one => one.uuid !== uuid))
+  await changeIndex($, list => list.filter(one => one.uuid !== uuid))
   await update($, usage, map => {
     const { [uuid]: _dropped, ...rest } = map
 
@@ -343,11 +448,11 @@ async function readingFor($: EngineInterface, uuid: string, liveUuid: string | n
   if (uuid === liveUuid) {
     // The live login is Claude Code's to refresh, never this mod's: a refresh
     // rotates the token under Claude Code. Its token says whose usage comes back.
-    const credential = await readCredential($, LIVE_SERVICE)
+    const credential = await readLiveCredential($)
     if (credential === null) throw new Error(m.noStoredLogin)
     init = usageInit({ token: credential.claudeAiOauth.accessToken })
   } else {
-    const credential = await readCredential($, VAULT_SERVICE, uuid)
+    const credential = await readVault($, uuid)
     if (credential === null) throw new Error(m.noStoredLogin)
     init = usageInit({ token: (await ensureFresh($, uuid, credential)).claudeAiOauth.accessToken })
   }
@@ -429,7 +534,7 @@ async function refresh($: EngineInterface, isAsked: boolean): Promise<void> {
   try {
     await refreshAll($, isAsked)
   } catch (error) {
-    $.ui.toast(`account-switch: ${message(error)}`)
+    $.ui.toast(message(error))
   }
 }
 
@@ -524,8 +629,8 @@ export const register: Register = (on, options) => {
     const query = rest.join(' ')
     try {
       if (verb === '') {
-        // The release line, a five-line card per account, then the footer's three-line tiles below a blank line.
-        const rows = Math.max(1, (await read($, accounts)).length) * 5 + 5
+        // The release line, a five-line card per account, then the one-row footer below a blank line.
+        const rows = Math.max(1, (await read($, accounts)).length) * 5 + 3
         await $.ui.open({ id: PANE, title: m.paneTitle, rows })
 
         return { text: m.paneOpened }
@@ -569,365 +674,70 @@ export const register: Register = (on, options) => {
     const windows = (reading?.limits ?? []).filter(limit => limit.label === '5h' || limit.label === 'wk')
     const contextUsed = (await $.session.usage()).context.percent ?? status?.contextUsed ?? null
     if (!status && contextUsed === null && (!account || windows.length === 0)) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const now = await $.clock.now()
-    const room = Math.max(20, e.props.bodyColumns)
 
-    const drawPill = (key: string, segments: PillSegment[]) => (
-      <Text key={key}>
-        <Text color={ansiHex(segments[0]?.bg ?? 0)}>▐</Text>
-        {segments.map((segment, index) => {
-          const after = segments[index + 1]
-
-          return (
-            <Text key={`${key}-${index}`}>
-              <Text backgroundColor={ansiHex(segment.bg)} color={ansiHex(segment.fg)} bold={segment.bold === true}>
-                {segment.letters
-                  ? segment.letters.map((letter, at) => (
-                      <Text key={`${key}-${index}-${at}`} color={ansiHex(letter.fg)}>
-                        {letter.char}
-                      </Text>
-                    ))
-                  : segment.text}
-              </Text>
-              {after ? (
-                <Text color={ansiHex(segment.bg)} backgroundColor={ansiHex(after.bg)}>
-                  ▌
-                </Text>
-              ) : (
-                <Text color={ansiHex(segment.bg)}>▌</Text>
-              )}
-            </Text>
-          )
-        })}
-      </Text>
-    )
-
-    type Cell = { key: string; width: number; draw: () => ReturnType<typeof drawPill> }
-    const first: Cell[] = []
-    // The session's own context reading comes first; the status line's forward when it has none yet.
-    if (contextUsed !== null) {
-      // The usage bars' gauge, coloured by the context thresholds, on a ground of its own.
-      const scaled = contextScaled(contextUsed)
-      const { filled, rest } = barParts(scaled, BAR_WIDTH)
-      const label = scaled >= 95 ? `✖ ${scaled}%` : `${scaled}%`
-      const ground = ansiHex(CONTEXT_GROUND)
-      const ink = ansiHex(contextLabelColor(scaled))
-      first.push({
-        key: 'context',
-        width: displayWidth(`ctx ${bar(scaled, BAR_WIDTH)} ${label}`) + 2,
-        draw: () => (
-          <Text key="context">
-            <Text color={ground}>▐</Text>
-            <Text backgroundColor={ground} color={ansiHex(250)}>
-              ctx{' '}
-            </Text>
-            <Text backgroundColor={ground} color={ink}>
-              {filled}
-            </Text>
-            <Text backgroundColor={ground} color={ansiHex(240)}>
-              {rest}
-            </Text>
-            <Text backgroundColor={ground} color={ink} bold>
-              {` ${label}`}
-            </Text>
-            <Text color={ground}>▌</Text>
-          </Text>
-        ),
-      })
-    }
-    if (status) {
-      const model = modelPill(status)
-      first.push({ key: 'model', width: pillWidth(model, displayWidth), draw: () => drawPill('model', model) })
-      if (status.task) {
-        const task = `‣ ${status.task}`
-        first.push({
-          key: 'task',
-          width: displayWidth(task),
-          draw: () => (
-            <Text key="task" color={ansiHex(229)} bold>
-              {task}
-            </Text>
-          ),
-        })
-      }
-    }
-
-    const second: Cell[] = []
-    if (account) {
-      const name = `${account.email}${reading?.isStale ? ` ${STALE_MARK}` : ''}`
-      second.push({
-        key: 'account',
-        width: displayWidth(name),
-        draw: () => (
-          <Text key="account">
-            <Text color={ansiHex(110)}>{account.email}</Text>
-            {reading?.isStale && <Text color="yellow" dimColor>{` ${STALE_MARK}`}</Text>}
-          </Text>
-        ),
-      })
-    }
-    for (const limit of windows) {
-      const reset = resetClock(limit.resetsAt, now, locale)
-      const text = `${limit.label} ${bar(limit.percent, BAR_WIDTH)} ${Math.round(limit.percent)}%${reset ? ` ↻ ${reset}` : ''}`
-      const { filled, rest } = barParts(limit.percent, BAR_WIDTH)
-      second.push({
-        key: limit.label,
-        width: displayWidth(text),
-        draw: () => (
-          <Text key={`usage-${limit.label}`}>
-            <Text dimColor>{limit.label} </Text>
-            <Text color={severityColor(limit.percent)}>{filled}</Text>
-            <Text color="gray" dimColor>
-              {rest}
-            </Text>
-            <Text> {Math.round(limit.percent)}%</Text>
-            {reset && <Text dimColor> ↻ {reset}</Text>}
-          </Text>
-        ),
-      })
-    }
-    // The place comes last, right before the lines changed.
-    if (status) {
-      const place = placePill(status)
-      const pr = status.pr
-      const mark = pr ? reviewMark(pr.reviewState) : undefined
-      const prText = pr ? ` #${pr.number}${mark ? mark.text : ''}` : ''
-      second.push({
-        key: 'place',
-        width: pillWidth(place, displayWidth) + displayWidth(prText),
-        draw: () => (
-          <Text key="place">
-            {drawPill('place-pill', place)}
-            {pr && (
-              <Text color={ansiHex(75)} bold>
-                {` #${pr.number}`}
-              </Text>
-            )}
-            {mark && <Text color={ansiHex(mark.fg)}>{mark.text}</Text>}
-          </Text>
-        ),
-      })
-    }
-    if (status && (status.linesAdded > 0 || status.linesRemoved > 0)) {
-      const added = `+${status.linesAdded}`
-      const removed = `-${status.linesRemoved}`
-      second.push({
-        key: 'lines',
-        width: displayWidth(`${added} ${removed}`),
-        draw: () => (
-          <Text key="lines">
-            <Text color={ansiHex(42)} bold>
-              {added}
-            </Text>
-            <Text> </Text>
-            <Text color={ansiHex(203)} bold>
-              {removed}
-            </Text>
-          </Text>
-        ),
-      })
-    }
-
-    // One line while it fits; a new row only where the band runs out of room.
-    // The context sits right before the five-hour window, beside the other gauges.
-    const context = first.filter(cell => cell.key === 'context')
-    const firstUsage = second.findIndex(cell => cell.key === '5h' || cell.key === 'wk')
-    const cells = [
-      ...first.filter(cell => cell.key !== 'context'),
-      ...(firstUsage < 0 ? [...second, ...context] : [...second.slice(0, firstUsage), ...context, ...second.slice(firstUsage)]),
-    ]
-    const rows = packRows(cells, room, STATUS_GAP).map((row, index) => (
-      <Box key={`status-row-${index}`} gap={STATUS_GAP}>
-        {row.map(cell => cell.draw())}
-      </Box>
-    ))
-    // One row is returned bare: a column around it can leave a blank row below on the terminal.
-    const [only] = rows
-
-    return rows.length === 1 && only ? only : <Box flexDirection="column">{rows}</Box>
+    return StatusBand($.ui.resolve(e), {
+      status,
+      account,
+      reading,
+      windows,
+      contextUsed,
+      now: await $.clock.now(),
+      locale,
+      room: Math.max(20, e.props.bodyColumns),
+    })
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const list = await read($, accounts)
-    const liveUuid = await read($, live)
-    const readings = await read($, usage)
-    const removing = await read($, pendingRemove)
+    const ui = $.ui.resolve(e)
+    const { Box } = ui
+    const bodyColumns = e.props.bodyColumns ?? 60
     const isBusy = await read($, isRefreshing)
-    const isGuideShown = await read($, isGuideOpen)
-    // Three equal tiles across the pane, the gaps between them taken out first.
-    const tileWidth = Math.max(10, Math.floor(((e.props.bodyColumns ?? 60) - TILE_GAP * 2) / 3))
-    const now = await $.clock.now()
     const act = (work: () => Promise<string | void>) => () => {
       void work()
         .then(text => text && $.ui.toast(text))
-        .catch((error: unknown) => $.ui.toast(`account-switch: ${message(error)}`))
+        .catch((error: unknown) => $.ui.toast(message(error)))
     }
 
     return (
       <Box flexDirection="column">
-        <Box key="header" justifyContent="space-between">
-          <Text bold>{BRAND}</Text>
-          {release.version && <Text dimColor>{m.release(release.version, release.date)}</Text>}
-        </Box>
-        {list.length === 0 && <Text dimColor>{m.noAccountsYet}</Text>}
-        {list.map(one => {
-          const reading = readings[one.uuid]
-          const isLive = one.uuid === liveUuid
+        {Header(ui, BRAND, release.version ? m.release(release.version, release.date) : undefined)}
+        {AccountsTab(
+          ui,
+          {
+            list: await read($, accounts),
+            liveUuid: await read($, live),
+            readings: await read($, usage),
+            pendingConfirm: await read($, pendingConfirm),
+            isGuideShown: await read($, isGuideOpen),
+            now: await $.clock.now(),
+            locale,
+            m,
+            bodyColumns,
+          },
+          {
+            switchTo: uuid => act(() => switchTo($, uuid))(),
+            arm: key => act(async () => {
+              await update($, pendingConfirm, () => key)
+            })(),
+            remove: uuid =>
+              act(async () => {
+                await update($, pendingConfirm, () => null)
 
-          return (
-            <Box
-              key={`row-${one.uuid}`}
-              flexDirection="column"
-              borderStyle="round"
-              borderColor={isLive ? 'cyan' : undefined}
-              borderDimColor={!isLive}
-              paddingX={1}
-            >
-              <Box justifyContent="space-between">
-                <Text>
-                  <Text color={isLive ? 'cyan' : undefined} dimColor={!isLive}>
-                    {isLive ? '● ' : '○ '}
-                  </Text>
-                  <Text bold={isLive}>{one.email}</Text>
-                  {isLive && <Text> </Text>}
-                  {isLive && <Text color="black" backgroundColor="cyan"> {m.active} </Text>}
-                  {reading?.isStale && <Text color="yellow" dimColor> {STALE_MARK}</Text>}
-                </Text>
-                {!isLive && (
-                  <Box gap={2}>
-                    <Button
-                      key={`use-${one.uuid}`}
-                      label="⇄"
-                      plain
-                      dimColor
-                      hover={{ color: 'cyan', bold: true }}
-                      onPress={act(() => switchTo($, one.uuid))}
-                    />
-                    {removing === one.uuid ? (
-                      <Button
-                        key={`confirm-${one.uuid}`}
-                        label="✕?"
-                        plain
-                        hover={{ color: 'red', bold: true }}
-                        onPress={act(async () => {
-                          await update($, pendingRemove, () => null)
-
-                          return remove($, one.uuid)
-                        })}
-                      />
-                    ) : (
-                      <Button
-                        key={`remove-${one.uuid}`}
-                        label="✕"
-                        plain
-                        dimColor
-                        hover={{ color: 'red' }}
-                        onPress={act(async () => {
-                          await update($, pendingRemove, () => one.uuid)
-                        })}
-                      />
-                    )}
-                  </Box>
-                )}
-              </Box>
-              {(() => {
-                // Windows that reset together share one cell: their bars side by side, one reset line.
-                const groups: LimitView[][] = []
-                for (const limit of reading?.limits ?? []) {
-                  const together = groups.find(group => group[0] && group[0].label !== '5h' && limit.label !== '5h' && isSameReset(group[0].resetsAt, limit.resetsAt))
-                  if (together) together.push(limit)
-                  else groups.push([limit])
-                }
-                const cells = groups.map(group => {
-                  const heads = group.map(limit => `${limit.label} ${bar(limit.percent, BAR_WIDTH)} ${Math.round(limit.percent)}%`)
-                  const reset = resetText(group[0]?.resetsAt, now, locale, m.now)
-                  const foot = reset ? `↻ ${reset}` : ''
-                  const headWidth = heads.reduce((sum, head) => sum + displayWidth(head), 0) + CELL_GAP * (heads.length - 1)
-
-                  return { group, foot, width: Math.max(headWidth, displayWidth(foot)) }
-                })
-                // Rows are laid out here: the terminal's own wrap leaves blank lines between rows.
-                // The card's border and padding take CARD_CHROME cells, the limits' indent two more.
-                const room = Math.max(20, (e.props.bodyColumns ?? 60) - CARD_CHROME - 2)
-
-                return (
-                  <Box flexDirection="column" paddingLeft={2}>
-                    {packRows(cells, room, CELL_GAP).map((row, rowIndex) => (
-                      <Box key={`${one.uuid}-limits-${rowIndex}`} gap={CELL_GAP}>
-                        {row.map(({ group, foot, width }) => (
-                          <Box key={`${one.uuid}-${group[0]?.label}`} flexDirection="column" width={width}>
-                            <Box gap={CELL_GAP}>
-                              {group.map(limit => (
-                                <Text key={`${one.uuid}-${limit.label}`}>
-                                  <Text dimColor>{limit.label} </Text>
-                                  <Text color={severityColor(limit.percent)}>{barParts(limit.percent, BAR_WIDTH).filled}</Text>
-                                  <Text color="gray" dimColor>{barParts(limit.percent, BAR_WIDTH).rest}</Text>
-                                  <Text> {Math.round(limit.percent)}%</Text>
-                                </Text>
-                              ))}
-                            </Box>
-                            {foot !== '' && <Text dimColor>{foot}</Text>}
-                          </Box>
-                        ))}
-                      </Box>
-                    ))}
-                    {!reading && <Text dimColor>{m.loading}</Text>}
-                    {reading?.error && <Text color="red">{reading.error}</Text>}
-                  </Box>
-                )
-              })()}
-            </Box>
-          )
-        })}
-        {isGuideShown && (
-          <Box key="guide" flexDirection="column" marginTop={1} paddingLeft={2}>
-            {m.addGuide.split('\n').map((line, index) => (
-              <Text key={`guide-${index}`} dimColor={index > 0}>
-                {line}
-              </Text>
-            ))}
-          </Box>
+                return remove($, uuid)
+              })(),
+          },
         )}
-        <Box key="footer" gap={TILE_GAP} marginTop={1}>
-          {[
-            {
-              key: 'refresh',
-              label: isBusy ? m.refreshingButton : m.refreshButton,
-              isMain: true,
-              onPress: act(() => refresh($, true)),
-            },
-            {
-              key: 'add',
-              label: m.addButton,
-              isMain: false,
-              onPress: act(async () => {
-                await update($, isGuideOpen, shown => !shown)
-              }),
-            },
-            { key: 'close', label: m.closeButton, isMain: false, onPress: act(() => $.ui.close({ id: PANE })) },
-          ].map(action => (
-            // One third of the row each: a bordered, filled tile around a plain button.
-            <Box
-              key={`tile-${action.key}`}
-              width={tileWidth}
-              justifyContent="center"
-              borderStyle="round"
-              borderColor={action.isMain ? 'cyan' : 'gray'}
-              backgroundColor={TILE_BACKGROUND}
-              hover={{ backgroundColor: TILE_HOVER_BACKGROUND, borderColor: 'cyan' }}
-            >
-              <Button
-                key={action.key}
-                label={action.label}
-                plain
-                {...(action.key === 'close' ? { role: 'dismiss' as const } : {})}
-                onPress={action.onPress}
-              />
-            </Box>
-          ))}
-        </Box>
+        {Tiles(ui, bodyColumns, [
+          { key: 'refresh', label: isBusy ? m.refreshingButton : m.refreshButton, isMain: true, onPress: act(() => refresh($, true)) },
+          {
+            key: 'add',
+            label: m.addButton,
+            onPress: act(async () => {
+              await update($, isGuideOpen, shown => !shown)
+            }),
+          },
+          { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => $.ui.close({ id: PANE })) },
+        ])}
       </Box>
     )
   })

@@ -27,7 +27,7 @@ function seedState(on: On, extra: Record<string, unknown>): void {
       u2: { limits: [], fetchedAt: 0, error: 'Login expired', source: 'lookup' },
       u3: { limits: [{ label: '5h', percent: 10 }], fetchedAt: 0, isStale: true, source: 'lookup' },
     },
-    pendingRemove: null,
+    pendingConfirm: null,
     isRefreshing: false,
     isGuideOpen: false,
     status: null,
@@ -59,7 +59,11 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     expect(await ui.find({ key: 'use-u1' })).toBeUndefined()
     // The footer splits into three bordered, filled tiles, one button in each.
     for (const key of ['refresh', 'add', 'close']) {
-      expect((await ui.find({ key: `tile-${key}` }))?.props).toMatchObject({ borderStyle: 'round', width: 39 })
+      // One row tall: a filled tile with no border.
+      const tile = (await ui.find({ key: `tile-${key}` }))?.props
+      expect(tile).toMatchObject({ width: 39 })
+      expect(tile?.borderStyle).toBeUndefined()
+      expect(tile?.backgroundColor).toBeDefined()
       expect(await ui.find({ key })).toBeDefined()
       // Words alone: no glyph ahead of the label, no hotkey drawn beside it.
       expect((await ui.find({ key }))?.text).toMatch(/^[\p{L} ]+$/u)
@@ -81,12 +85,12 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
 })
 
 test('a pending removal asks for confirmation and the guide shows every line', async ($, on) => {
-  seedState(on, { pendingRemove: 'u2', isGuideOpen: true })
+  seedState(on, { pendingConfirm: 'remove:u2', isGuideOpen: true })
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
-    expect(await ui.find({ key: 'confirm-u2' })).toBeDefined()
+    expect(await ui.find({ key: 'remove-u2-confirm' })).toBeDefined()
     // Icons alone: the confirming press is told apart by its question mark.
-    expect((await ui.find({ key: 'confirm-u2' }))?.text).toBe('✕?')
+    expect((await ui.find({ key: 'remove-u2-confirm' }))?.text).toBe('✕?')
     expect(await ui.find({ key: 'remove-u2' })).toBeUndefined()
     // Text carries no key, so the guide's last line is found by its words.
     expect(await ui.find({ type: 'Text', text: /Within a minute/ })).toBeDefined()

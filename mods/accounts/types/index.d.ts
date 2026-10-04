@@ -55,8 +55,8 @@ declare module 'claude-code' {
       usage: Record<string, UsageView>
       /** accountUuid of the login Claude Code currently uses, or null. */
       live: string | null
-      /** uuid whose Remove button awaits its confirming press. */
-      pendingRemove: string | null
+      /** The action whose button awaits its confirming press, as `<kind>:<id>`. */
+      pendingConfirm: string | null
       isRefreshing: boolean
       /** Whether the pane shows how to add an account. */
       isGuideOpen: boolean
