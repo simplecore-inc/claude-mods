@@ -1,12 +1,25 @@
 {
   "name": "sc-accounts",
-  "version": "0.3.0",
+  "displayName": "SimpleCORE Accounts",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "Switch between saved Claude logins and watch every account's rate limits",
   "author": {
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"
   },
+  "homepage": "https://github.com/simplecore-inc/claude-mods/blob/main/docs/accounts.md",
+  "repository": "https://github.com/simplecore-inc/claude-mods",
+  "keywords": [
+    "claude-code",
+    "account-switcher",
+    "multi-account",
+    "usage-limits",
+    "rate-limits",
+    "statusline",
+    "status-band",
+    "mod"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "showStatusBand": {

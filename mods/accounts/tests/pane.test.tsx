@@ -23,7 +23,7 @@ const STATUS = {
 const bandProps = (bodyColumns: number) => ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns }) as never
 
 /** Stands in for the engine's state store beneath the plugin, seeded with two accounts. */
-function seedState(on: On, extra: Record<string, unknown>): void {
+function seedState(on: On, extra: Record<string, unknown>, now?: number): void {
   const values: Record<string, unknown> = {
     accounts: [
       { uuid: 'u1', email: 'mina@example.com', savedAt: 0 },
@@ -61,7 +61,7 @@ function seedState(on: On, extra: Record<string, unknown>): void {
   })
   // The session's own context reading.
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000, percent: 40 }, rateLimits: [] } as never }))
-  mock.clock(on)
+  mock.clock(on, (now === undefined ? undefined : { now }) as never)
 }
 
 function mountPane($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 120) {
@@ -172,9 +172,9 @@ test('with the accounts pane closed, pressing the account\'s name opens it with 
   seedState(on, { status: STATUS })
   on('ui.panes', () => ({ value: [] as never }))
   // Stands for the engine placing the pane.
-  const opened: { id: string; focus?: boolean }[] = []
+  const opened: { id: string; focus?: boolean; title?: string }[] = []
   on('ui.open', ($, e) => {
-    opened.push({ id: e.id, focus: e.focus })
+    opened.push({ id: e.id, focus: e.focus, title: e.title })
     return { value: { isPlaced: true } as never }
   })
   // Beneath the plugins: a press their hooks let through reaches here.
@@ -200,7 +200,7 @@ test('with the accounts pane closed, pressing the account\'s name opens it with 
     opened.length = 0
     // Taken by the ui.press hook, inside the person's press: the pane is asked for.
     expect(await ui.press({ key: 'band-account' })).toEqual({ element: 'band-account' })
-    expect(opened).toEqual([{ id: 'account-switch', focus: true }])
+    expect(opened).toEqual([{ id: 'account-switch', focus: true, title: 'SC-Accounts' }])
     expect(passedThrough).toEqual([])
     await ui.unmount()
   }
@@ -261,20 +261,23 @@ test('with the status line command\'s forward, the band shows its line above the
     for (const text of ['Opus5.5', '○ low', '▶ fast', '‣ Writing tests', 'claude-mods', '◇ main', ' #12', '+3', '-1']) {
       expect(row).toContain(text)
     }
-    // Everything fits one line at this width, the session's context first.
+    // Everything fits one line at this width.
     expect(await ui.find({ key: 'status-row-0' })).toBeDefined()
     expect(await ui.find({ key: 'status-row-1' })).toBeUndefined()
     // The context is a gauge like the usage bars: a label, thin bar cells, the percentage.
-    expect(await ui.find({ type: 'Text', text: '▐ctx ━━━━━━━━ 50%▌' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '▐ctx ━━━━━━ 50%▌' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' 50%' })).toBeDefined()
     // The place sits at the end, right before the lines changed.
     expect(row.indexOf('45%')).toBeGreaterThan(-1)
     expect(row.indexOf('claude-mods')).toBeGreaterThan(row.indexOf('45%'))
     expect(row.indexOf('claude-mods')).toBeLessThan(row.indexOf('+3'))
-    // The context gauge sits right before the five-hour window, after the account.
-    expect(row.indexOf('ctx')).toBeGreaterThan(row.indexOf('mina@example.com'))
+    // The account leads, the model and effort come second, the task after them.
+    expect(row.indexOf('mina@example.com')).toBe(row.search(/\S/))
+    expect(row.indexOf('Opus5.5')).toBeGreaterThan(row.indexOf('mina@example.com'))
+    expect(row.indexOf('‣ Writing tests')).toBeGreaterThan(row.indexOf('○ low'))
+    // The context gauge sits right before the five-hour window, after the task.
+    expect(row.indexOf('ctx')).toBeGreaterThan(row.indexOf('‣ Writing tests'))
     expect(row.indexOf('ctx')).toBeLessThan(row.indexOf('5h'))
-    expect(row.indexOf('ctx')).toBeGreaterThan(row.indexOf('Opus5.5'))
     expect(await ui.find({ type: 'Text', text: /█|░/ })).toBeUndefined()
     await ui.unmount()
   }
@@ -408,9 +411,47 @@ test('alone, the pane\'s header names it: SimpleCORE Mods: Accounts', async ($, 
   await ui.unmount()
 })
 
-test('beside the workspace, the engine\'s tab names the pane and the header does not', async ($, on) => {
+test('beside the workspace, the header still names the pane, a row below the engine\'s tabs', async ($, on) => {
   seedState(on, { 'sc-workspace:paneOpen': true })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /SimpleCORE Mods/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Accounts' })).toBeDefined()
+  expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(1)
   await ui.unmount()
 })
+
+test('alone, the header names the pane on the first row', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Accounts' })).toBeDefined()
+  expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(0)
+  await ui.unmount()
+})
+
+for (const [who, configured, isFiled] of [
+  ['the login this session knows', 'u1', true],
+  ['a login another session switched to', 'u2', false],
+] as const) {
+  test(`a response measured under ${who} is ${isFiled ? '' : 'never '}filed under the live account`, async ($, on) => {
+    // The turn starts after the live account last changed (at 0), as a turn after a switch does.
+    seedState(on, {}, 60_000)
+    // Stand for the engine beneath: Claude Code's config names the login its requests use.
+    on('env.get', ($, e) => ({ value: (e.name === 'HOME' ? '/home/me' : undefined) as never }))
+    on('fs.read', () => ({ value: JSON.stringify({ oauthAccount: { accountUuid: configured, emailAddress: 'x@example.com' } }) as never }))
+    const stored: string[] = []
+    on('store.set', ($, e) => {
+      stored.push(e.key)
+      return { value: undefined as never }
+    })
+    on('store.get', () => ({ value: undefined as never }))
+    on('session.measure', ($, e) => ({ changed: e.changed }) as never)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+    on('ui.log', () => ({ value: undefined as never }))
+    await $.turn.start({ turnId: 't1', prompt: 'hi' } as never).catch(() => undefined)
+    await $.session.measure({
+      context: { window: 200_000, percent: 40 },
+      rateLimits: [{ kind: 'five_hour', percentUsed: 50, resetsAt: '2099-01-01T00:00:00Z' }],
+      changed: ['rateLimits'],
+    } as never)
+    expect(stored.includes('usage')).toBe(isFiled)
+  })
+}

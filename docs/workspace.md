@@ -55,11 +55,11 @@ The files changed since the session started, or since a checkpoint. The base is 
 
 ![The dialog that picks what the changes are compared with](images/workspace-base.svg)
 
-Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts. Pressing a file shows its diff below.
+Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts. Pressing a file shows its diff below. A long diff shows its first 9,500 characters, and a line over 400 characters is cut with `…`; the rest is counted below it.
 
 ## The pane's name
 
-The header names the pane, `SimpleCORE Mods: Workspace`. With the accounts pane open too, Claude Code shows the two as tabs, and the name moves to the tab.
+The header names the pane, `SimpleCORE Mods: Workspace`. With the accounts pane open too, Claude Code shows the two as tabs, `SC-Workspace` and `SC-Accounts`, and the header stays, a row below the tabs.
 
 ## Dialogs
 
@@ -84,4 +84,4 @@ Every action that cannot be taken back (restoring a checkpoint, deleting a note,
 ## Caveats
 
 - A checkpoint holds every untracked file that is not ignored, secrets in an unignored `.env` included. Its refs live under `refs/sc/`, which a normal `git push` leaves behind and `git push --mirror` sends.
-- Restoring removes the files made since a checkpoint with `rm`, which Windows has only under WSL.
+- Restoring removes the files made since a checkpoint with `rm`, or with PowerShell's `Remove-Item` on Windows.

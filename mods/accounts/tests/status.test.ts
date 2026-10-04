@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { StatusCollector, transcriptPath } from '../hooks/collector'
+import { projectFolder, StatusCollector, transcriptPath } from '../hooks/collector'
 import type { CollectorIo } from '../hooks/collector'
 import { displayModel, editedPath, inProgressTask, lineChanges, parsePr, settledEffort, todoFilesOf, ultracodeAfter } from '../hooks/status'
 
@@ -56,8 +56,87 @@ test('the in-progress task, the session\'s newest todo list, the PR and the sett
   expect(settledEffort({ effortLevel: 'xhigh' }, 'claude-sonnet-5-5')).toBe('xhigh')
 })
 
-test('the transcript sits in the project folder Claude Code names after the root', async () => {
-  expect(transcriptPath('/home/me', '/Users/me/Work/claude-mods', 's1')).toBe('/home/me/.claude/projects/-Users-me-Work-claude-mods/s1.jsonl')
+test('the transcript sits in the project folder Claude Code names after the root, under its config directory', async () => {
+  expect(transcriptPath('/home/me/.claude', '/Users/me/Work/claude-mods', 's1')).toBe('/home/me/.claude/projects/-Users-me-Work-claude-mods/s1.jsonl')
+  expect(transcriptPath('C:/Users/me/.claude', 'C:\\Users\\me\\app', 's1')).toBe('C:/Users/me/.claude/projects/C--Users-me-app/s1.jsonl')
+})
+
+test('a project folder name over 200 characters is cut there and ends with the hash Claude Code adds', async () => {
+  // The expected name was computed with the function copied out of Claude Code 2.1.289.
+  const root = `/Users/me/${'very-long-folder-name/'.repeat(10)}app`
+  const name = projectFolder(root)
+  expect(name.length).toBe(207)
+  expect(name.slice(195)).toBe('-fold-tb3ucq')
+  expect(projectFolder('/a'.repeat(100))).toBe('-a'.repeat(100))
+})
+
+test('a transcript not in the folder named after the root is found by searching the project folders, once a minute at most', async () => {
+  const files = new Set(['/c/projects/-private-tmp-w/s1.jsonl'])
+  let listed = 0
+  const io: CollectorIo = {
+    run: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+    read: async () => null,
+    list: async () => {
+      listed += 1
+      return [{ name: '-other', mtimeMs: 0 }, { name: '-private-tmp-w', mtimeMs: 0 }]
+    },
+    size: async path => (files.has(path) ? 10 : null),
+  }
+  const collector = new StatusCollector(io)
+  expect(await collector.transcript('/c', '/tmp/w', 's1', 0)).toBe('/c/projects/-private-tmp-w/s1.jsonl')
+  // Found once, kept.
+  expect(await collector.transcript('/c', '/tmp/w', 's1', 1)).toBe('/c/projects/-private-tmp-w/s1.jsonl')
+  expect(listed).toBe(1)
+  // Named after the root: no search.
+  files.add('/c/projects/-tmp-w/s2.jsonl')
+  expect(await collector.transcript('/c', '/tmp/w', 's2', 2)).toBe('/c/projects/-tmp-w/s2.jsonl')
+  expect(listed).toBe(1)
+  // Not written yet: searched, then not again within the minute.
+  expect(await collector.transcript('/c', '/tmp/w', 's3', 10)).toBeNull()
+  expect(await collector.transcript('/c', '/tmp/w', 's3', 30_000)).toBeNull()
+  expect(listed).toBe(2)
+  expect(await collector.transcript('/c', '/tmp/w', 's3', 70_010)).toBeNull()
+  expect(listed).toBe(3)
+})
+
+test('a transcript scan stopped by the time limit is tried again from the same offset', async () => {
+  const calls: string[][] = []
+  let isSlow = true
+  const io: CollectorIo = {
+    run: async argv => {
+      calls.push([...argv])
+      if (isSlow) throw new Error('aborted: still running after 30000ms')
+      return { exitCode: 0, stdout: `${JSON.stringify({ type: 'attachment', attachment: { type: 'ultra_effort_enter' } })}\n`, stderr: '' }
+    },
+    read: async () => null,
+    list: async () => [],
+    size: async () => 100,
+  }
+  const collector = new StatusCollector(io)
+  expect(await collector.ultracode('/t.jsonl')).toBe(false)
+  isSlow = false
+  expect(await collector.ultracode('/t.jsonl')).toBe(true)
+  expect(calls.map(argv => argv[6])).toEqual(['1', '1'])
+  expect(await collector.ultracode(null)).toBe(false)
+})
+
+test('a tool missing on this machine empties its part of the status, and a missing shell is not tried again', async () => {
+  let shells = 0
+  const io: CollectorIo = {
+    run: async argv => {
+      if (argv[0] === 'sh') shells += 1
+      throw new Error(`failed to start: ENOENT: no such file or directory, posix_spawn '${argv[0]}'`)
+    },
+    read: async () => null,
+    list: async () => [],
+    size: async () => 10,
+  }
+  const collector = new StatusCollector(io)
+  expect(await collector.branch('/w')).toBe('')
+  expect(await collector.pullRequest('/w', 'main', 0)).toBeNull()
+  expect(await collector.ultracode('/t.jsonl')).toBe(false)
+  expect(await collector.ultracode('/t.jsonl')).toBe(false)
+  expect(shells).toBe(1)
 })
 
 test('the collector scans only what the transcript gained, and asks gh once per window', async () => {

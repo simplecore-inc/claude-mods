@@ -102,15 +102,30 @@ export function shortPath(path: string, root: string, home: string | undefined):
   return path
 }
 
+/** The longest diff line shown whole; past it the line is cut and marked `…`. */
+export const DIFF_LINE_CHARS = 400
 /**
- * The diff text cut to `limit` lines, saying how many were left out. The
- * trailing newline goes: a diff renderer reads the empty line after it as a
- * malformed hunk line.
+ * The most characters a diff shown may hold. The engine refuses a `Code`
+ * source over 10,000 characters, and the whole pane is then drawn blank.
+ */
+export const DIFF_CHARS = 9_500
+
+/**
+ * The diff text cut to `limit` lines and to `DIFF_CHARS` characters, each
+ * line to `DIFF_LINE_CHARS` (a minified file or an SVG is one line of
+ * thousands), saying how many lines were left out. The trailing newline goes:
+ * a diff renderer reads the empty line after it as a malformed hunk line.
  */
 export function clipDiff(text: string, limit: number): { text: string; omitted: number } {
-  const trimmed = text.replace(/\n+$/, '')
-  const lines = trimmed.split('\n')
-  if (lines.length <= limit) return { text: trimmed, omitted: 0 }
+  const lines = text.replace(/\n+$/, '').split('\n')
+  const kept: string[] = []
+  let size = 0
+  for (const line of lines) {
+    const shown = line.length > DIFF_LINE_CHARS ? `${line.slice(0, DIFF_LINE_CHARS)}…` : line
+    if (kept.length === limit || size + shown.length + 1 > DIFF_CHARS) break
+    kept.push(shown)
+    size += shown.length + 1
+  }
 
-  return { text: lines.slice(0, limit).join('\n'), omitted: lines.length - limit }
+  return { text: kept.join('\n'), omitted: lines.length - kept.length }
 }

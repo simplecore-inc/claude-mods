@@ -3,6 +3,8 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { changeCells, splitPath } from '../hooks/views/diff'
+import { removeArgv } from '../hooks/shared/files'
+import { clipDiff } from '../hooks/git'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const NOW = Date.parse('2026-10-04T05:00:00Z')
@@ -461,13 +463,17 @@ test('pressing the accounts band\'s place or lines changed toggles the workspace
   on('ui.panes', () => ({ value: [] as never }))
   on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
   const opened: string[] = []
+  const titles: string[] = []
   on('ui.open', ($, e) => {
     opened.push(e.id)
+    titles.push(e.title ?? '')
     return { value: { isPlaced: true } as never }
   })
   const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as never })
   expect(await band.press({ key: 'band-lines' })).toEqual({ element: 'band-lines' })
   expect(opened).toEqual(['sc-workspace'])
+  // The engine's tab row names the pane short, while another pane is open beside it.
+  expect(titles).toEqual(['SC-Workspace'])
   // Any Button of the cell, not only its first: here the directory's name.
   expect(await band.press({ key: 'band-place-1' })).toEqual({ element: 'band-place-1' })
   expect(opened).toEqual(['sc-workspace', 'sc-workspace'])
@@ -496,12 +502,51 @@ test('alone, the pane\'s header names it: SimpleCORE Mods: Workspace', async ($,
   seedState(on, {})
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Workspace' })).toBeDefined()
+  expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(0)
   await ui.unmount()
 })
 
-test('beside the accounts pane, the engine\'s tab names the pane and the header does not', async ($, on) => {
+test('beside the accounts pane, the header still names the pane, a row below the engine\'s tabs', async ($, on) => {
   seedState(on, { 'sc-accounts:paneOpen': true })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /SimpleCORE Mods/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Workspace' })).toBeDefined()
+  expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(1)
+  await ui.unmount()
+})
+
+test('files are deleted with rm on a POSIX system and with PowerShell on Windows', async () => {
+  expect(removeArgv(['a/b.txt', 'c.txt'], false)).toEqual(['rm', '-f', '--', 'a/b.txt', 'c.txt'])
+  expect(removeArgv(['a/b.txt'], true)[0]).toBe('powershell.exe')
+})
+
+test('a diff of one huge line (an SVG), or of many ordinary lines, still draws: it is cut within the engine\'s bound', async ($, on) => {
+  const huge = `diff --git a/x.svg b/x.svg\n--- a/x.svg\n+++ b/x.svg\n@@ -0,0 +1 @@\n+${'<rect/>'.repeat(20_000)}`
+  seedState(on, {
+    tab: 'diff',
+    diff: {
+      base: { commit: 'c1', label: 'Session start', at: NOW - 3_600_000, isSessionStart: true },
+      files: [{ path: 'x.svg', status: 'added', added: 1, removed: 0 }],
+      selected: { path: 'x.svg', ...clipDiff(huge, 400) },
+      at: NOW,
+    },
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Code' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a long diff of ordinary lines draws, cut to what the engine takes', async ($, on) => {
+  const long = ['diff --git a/r.ts b/r.ts', '--- a/r.ts', '+++ b/r.ts', '@@ -1,400 +1,400 @@', ...Array.from({ length: 400 }, (_, index) => `+const line${index} = 'an ordinary line of source code here'`)].join('\n')
+  seedState(on, {
+    tab: 'diff',
+    diff: {
+      base: { commit: 'c1', label: 'Session start', at: NOW - 3_600_000, isSessionStart: true },
+      files: [{ path: 'r.ts', status: 'modified', added: 400, removed: 0 }],
+      selected: { path: 'r.ts', ...clipDiff(long, 400) },
+      at: NOW,
+    },
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Code' })).toBeDefined()
   await ui.unmount()
 })

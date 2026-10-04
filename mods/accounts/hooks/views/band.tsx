@@ -6,8 +6,10 @@ import type { Locale } from '../i18n'
 import { ansiHex, contextLabelColor, contextScaled, modelPill, pillWidth, placePill, reviewMark } from '../statusline'
 import type { PillSegment } from '../statusline'
 import { STALE_MARK } from './accounts'
-import { GAUGE_WIDTH as BAR_WIDTH, Rule } from '../shared/kit'
+import { Rule } from '../shared/kit'
 
+/** Cells a band gauge spans: narrower than the pane's, so the band keeps to one line longer. */
+const BAR_WIDTH = 6
 /** The xterm-256 ground behind the context gauge. */
 const CONTEXT_GROUND = 236
 /** The xterm-256 ground behind the lines changed. */
@@ -140,7 +142,7 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     { text: '▌', color: ground },
   ]
   const first: Cell[] = []
-  // The session's own context reading comes first; the status line's forward when it has none yet.
+  // The context gauge is built here and placed beside the usage windows below.
   if (contextUsed !== null) {
     // The usage bars' gauge, coloured by the context thresholds, on a ground of its own.
     const scaled = contextScaled(contextUsed)
@@ -163,6 +165,20 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
         ),
     })
   }
+  // The account leads the band; the model and effort follow it.
+  if (account) {
+    const name = `${account.email}${reading?.isStale ? ` ${STALE_MARK}` : ''}`
+    first.push({
+      key: 'account',
+      width: displayWidth(name),
+      draw: () =>
+        pressCell(
+          'account',
+          'accounts',
+          [{ text: account.email, color: ansiHex(110), bold: true }, ...(reading?.isStale ? [{ text: ` ${STALE_MARK}`, color: 'yellow', dimColor: true }] : [])],
+        ),
+    })
+  }
   if (status) {
     const model = modelPill(status)
     first.push({ key: 'model', width: pillWidth(model, displayWidth), draw: () => drawPill('model', model) })
@@ -181,19 +197,6 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
   }
 
   const second: Cell[] = []
-  if (account) {
-    const name = `${account.email}${reading?.isStale ? ` ${STALE_MARK}` : ''}`
-    second.push({
-      key: 'account',
-      width: displayWidth(name),
-      draw: () =>
-        pressCell(
-          'account',
-          'accounts',
-          [{ text: account.email, color: ansiHex(110), bold: true }, ...(reading?.isStale ? [{ text: ` ${STALE_MARK}`, color: 'yellow', dimColor: true }] : [])],
-        ),
-    })
-  }
   for (const limit of windows) {
     const reset = resetClock(limit.resetsAt, now, locale)
     const text = `${limit.label} ${bar(limit.percent, BAR_WIDTH)} ${Math.round(limit.percent)}%${reset ? ` ↻ ${reset}` : ''}`

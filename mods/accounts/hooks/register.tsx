@@ -20,7 +20,7 @@ import {
 import { describeLimits, pick, releaseDateOf } from './format'
 import { messagesFor, resolveLocale } from './i18n'
 import { Dialog, Header, Tiles } from './shared/kit'
-import { StatusCollector, transcriptPath } from './collector'
+import { StatusCollector } from './collector'
 import { changeKey, webhookRequest, webhookValues, DEFAULT_TEMPLATE_TEXT, parseConfig, renderTemplate, urlProblem, WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS } from './webhook'
 import type { WebhookConfig } from './webhook'
 import { displayModel, editedPath, lineChanges, settledEffort } from './status'
@@ -120,6 +120,8 @@ let collector: StatusCollector | null = null
 let sessionId = ''
 let sessionRoot = ''
 let homePath = ''
+/** Claude Code's config directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`): its todos and transcripts. */
+let configPath = ''
 let hostname: string | null = null
 let engineVersion: string | null = null
 /** The effort and model the latest main-loop request named; null before the first. */
@@ -132,6 +134,8 @@ let webhook: WebhookConfig = parseConfig(undefined)
 let lastFeed = { key: '', at: 0 }
 /** Whether a send is still waiting for its answer: a receiver that does not answer holds one send, never a queue. */
 let isFeedSending = false
+/** When Claude Code's config was last seen changed: a switch in any session rewrites it. */
+let configSeenAt = 0
 
 /** The `oauthAccount` object Claude Code keeps in its global config, kept whole. */
 type OauthAccount = {
@@ -400,7 +404,18 @@ async function loadIndex($: EngineInterface): Promise<void> {
  *
  * @returns the live account's uuid, or null with no Claude login
  */
+/** The read of the live login in progress, which every caller meanwhile shares: two at once would file one token twice. */
+let syncing: Promise<string | null> | null = null
+
 async function syncLive($: EngineInterface): Promise<string | null> {
+  syncing ??= syncLiveOnce($).finally(() => {
+    syncing = null
+  })
+
+  return syncing
+}
+
+async function syncLiveOnce($: EngineInterface): Promise<string | null> {
   const [configured, credential] = await Promise.all([liveOauthAccount($), readLiveCredential($)])
   if (configured === null || credential === null) {
     await update($, live, () => null)
@@ -467,9 +482,79 @@ async function readTemplate($: EngineInterface): Promise<string> {
   return $.fs.read(path)
 }
 
+/**
+ * Follows a switch made in another session within one status read: when
+ * Claude Code's config changed and names another login than this session's,
+ * the live account is read again and the figures the switching session
+ * stored are shown at once, rather than at the next minute's tick.
+ */
+async function followLogin($: EngineInterface): Promise<void> {
+  const path = await globalConfigPath($)
+  if (!(await $.fs.exists(path))) return
+  const { mtimeMs } = await $.fs.stat(path)
+  if (mtimeMs === configSeenAt) return
+  configSeenAt = mtimeMs
+  const configured = await liveOauthAccount($)
+  if (configured === null || configured.accountUuid === (await read($, live))) return
+  await syncLive($)
+  await adoptSharedUsage($)
+}
+
+/** How long Claude Code keeps a keychain login cached when no credentials file tells it of a change. */
+const KEYCHAIN_CACHE_MS = 35 * 1000
+
+/**
+ * From when a response's figures are the live account's: the moment it last
+ * changed, and on macOS without a credentials file, the keychain cache after
+ * it, during which a running session may still ask with the previous login.
+ */
+async function figuresTrustedFrom($: EngineInterface): Promise<number> {
+  const cached = (await platformOf($)).backend === 'keychain' && !(await $.fs.exists(await liveCredentialPath($)))
+
+  return liveChangedAt + (cached ? KEYCHAIN_CACHE_MS : 0)
+}
+
+/**
+ * Keeps the live account's five-hour and weekly figures equal to the ones
+ * this session's latest response reported, which need no lookup and no rate
+ * limit. Only once a turn has begun since the live account last changed:
+ * before that, the session's figures may be the previous login's. Written
+ * when they differ from what is shown, or when the shown reading is a minute
+ * old, so a figure filed wrongly is put right by the next response.
+ */
+async function adoptSessionFigures($: EngineInterface): Promise<void> {
+  const liveUuid = await read($, live)
+  if (liveUuid === null || turnStartedAt === 0 || turnStartedAt <= (await figuresTrustedFrom($))) return
+  const windows = (await $.session.usage()).rateLimits.filter(window => window.kind === 'five_hour' || window.kind === 'seven_day')
+  if (windows.length === 0) return
+  const now = await $.clock.now()
+  const current = (await read($, usage))[liveUuid]
+  const next = withMeasured(current, windows, now)
+  const shown = (reading: UsageView | undefined) =>
+    JSON.stringify((reading?.limits ?? []).filter(limit => limit.label === '5h' || limit.label === 'wk'))
+  if (shown(current) === shown(next) && current?.isStale !== true && now - (current?.fetchedAt ?? 0) < 60_000) return
+  await update($, usage, map => ({ ...map, [liveUuid]: next }))
+  await $.store.set(USAGE_KEY, { ...lookedUpOnly(await $.store.get(USAGE_KEY)), [liveUuid]: next })
+}
+
+/** Whether a status read is under way: a slow one (gh, a long transcript) is never overlapped by the next. */
+let isCollecting = false
+
 /** Reads the session's status: what the band draws and the webhook is sent. */
 async function collectStatus($: EngineInterface): Promise<StatusInfo | null> {
+  if (!collector || isCollecting) return null
+  isCollecting = true
+  try {
+    return await collectStatusOnce($)
+  } finally {
+    isCollecting = false
+  }
+}
+
+async function collectStatusOnce($: EngineInterface): Promise<StatusInfo | null> {
   if (!collector) return null
+  await followLogin($).catch((error: unknown) => debugLog($, error))
+  await adoptSessionFigures($).catch((error: unknown) => debugLog($, error))
   const cwd = await $.session.cwd()
   const modelId = await $.session.model()
   const settings = (await $.settings.read()) as { effortLevel?: unknown; modelSettings?: unknown; fastMode?: unknown }
@@ -477,8 +562,8 @@ async function collectStatus($: EngineInterface): Promise<StatusInfo | null> {
   const now = await $.clock.now()
   const [pr, task, ultracode] = await Promise.all([
     collector.pullRequest(cwd, branch, now),
-    collector.task(homePath, sessionId),
-    collector.ultracode(transcriptPath(homePath, sessionRoot, sessionId)),
+    collector.task(configPath, sessionId),
+    collector.transcript(configPath, sessionRoot, sessionId, now).then(path => collector?.ultracode(path) ?? false),
   ])
   const usageNow = await $.session.usage()
   const next: StatusInfo = {
@@ -638,28 +723,38 @@ async function switchTo($: EngineInterface, uuid: string): Promise<string> {
 
 async function remove($: EngineInterface, uuid: string): Promise<string> {
   const target = (await read($, accounts)).find(one => one.uuid === uuid)
-  if ((await read($, live)) === uuid) throw new Error(m.cannotRemoveLive)
+  // The login Claude Code uses now, as well as this session's: another session may have just switched to it.
+  if ((await read($, live)) === uuid || (await liveOauthAccount($))?.accountUuid === uuid) throw new Error(m.cannotRemoveLive)
   await deleteVault($, uuid)
   await $.store.delete(oauthAccountKey(uuid))
   await changeIndex($, list => list.filter(one => one.uuid !== uuid))
-  await update($, usage, map => {
+  const drop = (map: Record<string, UsageView>) => {
     const { [uuid]: _dropped, ...rest } = map
 
     return rest
-  })
+  }
+  await update($, usage, drop)
+  // And from the readings every session shares, or another session would show it again.
+  await $.store.set(USAGE_KEY, drop(lookedUpOnly(await $.store.get(USAGE_KEY))))
 
   return m.removed(target?.email ?? uuid)
 }
 
 // ── usage ─────────────────────────────────────────────────────────────────
 
+/** The login changed between reading whose it is and looking it up: the answer would be another account's. */
+class LoginChangedError extends Error {}
+
 async function readingFor($: EngineInterface, uuid: string, liveUuid: string | null): Promise<UsageView> {
   let init
   if (uuid === liveUuid) {
     // The live login is Claude Code's to refresh, never this mod's: a refresh
-    // rotates the token under Claude Code. Its token says whose usage comes back.
+    // rotates the token under Claude Code. Its token says whose usage comes back,
+    // so it must still be the one filed under this account a moment ago.
     const credential = await readLiveCredential($)
     if (credential === null) throw new Error(m.noStoredLogin)
+    const filed = await readVault($, uuid)
+    if (filed?.claudeAiOauth.accessToken !== credential.claudeAiOauth.accessToken) throw new LoginChangedError(uuid)
     init = usageInit({ token: credential.claudeAiOauth.accessToken })
   } else {
     const credential = await readVault($, uuid)
@@ -683,6 +778,7 @@ async function refreshLive($: EngineInterface): Promise<void> {
   try {
     reading = await readingFor($, liveUuid, liveUuid)
   } catch (error) {
+    if (error instanceof LoginChangedError) return
     reading = failedReading((await read($, usage))[liveUuid], error, await $.clock.now(), m)
   }
   await update($, usage, map => ({ ...map, [liveUuid]: reading }))
@@ -724,6 +820,8 @@ async function refreshAll($: EngineInterface, isAsked: boolean): Promise<void> {
         const reading = await readingFor($, account.uuid, liveUuid)
         await update($, usage, map => ({ ...map, [account.uuid]: reading }))
       } catch (error) {
+        // Another session switched meanwhile: nothing is filed, and the next lookup reads the new login.
+        if (error instanceof LoginChangedError) continue
         if (error instanceof AnthropicError && error.status === 429) {
           isRateLimited = true
           retryAfter = error.retryAfter ?? retryAfter
@@ -755,7 +853,7 @@ async function refresh($: EngineInterface, isAsked: boolean): Promise<void> {
  */
 async function openPane($: EngineInterface, focus = false, rows?: number): Promise<void> {
   const wanted = rows ?? Math.max(1, (await read($, accounts)).length) * 5 + 3
-  await $.ui.open({ id: PANE, title: paneName(), rows: wanted, ...(focus ? { focus: true, closeOnEscape: true } : {}) })
+  await $.ui.open({ id: PANE, title: TAB_LABEL, rows: wanted, ...(focus ? { focus: true, closeOnEscape: true } : {}) })
   if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
 }
 
@@ -776,7 +874,10 @@ async function syncPaneOpen($: EngineInterface): Promise<boolean> {
   return isOpen
 }
 
-/** The pane's name, the brand and the mod's: the engine's tab label, and the header's when no tabs show. */
+/** The pane's label on the engine's tab row, shown while another pane is open beside it. */
+const TAB_LABEL = 'SC-Accounts'
+
+/** The pane's name in its header: the brand and the mod's. */
 function paneName(): string {
   return `${BRAND}: ${MOD_NAME}`
 }
@@ -940,6 +1041,7 @@ export const register: Register = (on, options) => {
     // The session's status: read every two seconds from the engine, git, gh and the transcript.
     sessionRoot = await $.session.root()
     homePath = await homeDirectory($)
+    configPath = await claudeDirectory($)
     engineVersion = (await $.session.version()).version
     const host = await $.process.run(['hostname'], { timeoutMs: 2000 })
     hostname = host.exitCode === 0 ? host.stdout.trim() : null
@@ -1019,13 +1121,26 @@ export const register: Register = (on, options) => {
   })
 
   // Claude Code's own response reported its windows. They are the live account's
-  // only when this turn began after the live account last changed: a turn begun
-  // before a switch was answered by the previous login, so its figures prompt a
-  // lookup instead of being copied onto the account now live.
+  // only when this turn began after the live account last changed, and when the
+  // login Claude Code is configured with is still the one this session knows: a
+  // switch made in another session reaches every session's requests at once but
+  // this session's `live` only at its next tick, and the new login's figures must
+  // never be filed under the account it replaced. Otherwise the account is read
+  // again and looked up instead.
   on('session.measure', async ($, e, next) => {
     const liveUuid = await read($, live)
     if (liveUuid !== null && e.rateLimits.length > 0) {
-      if (turnStartedAt > liveChangedAt) {
+      const configured = await liveOauthAccount($).catch((error: unknown) => {
+        // An unreadable config names no account: the figures are not filed.
+        debugLog($, error)
+
+        return null
+      })
+      if (configured?.accountUuid !== liveUuid) {
+        void syncLive($)
+          .then(() => refreshLive($))
+          .catch((error: unknown) => $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' }))
+      } else if (turnStartedAt > (await figuresTrustedFrom($))) {
         const now = await $.clock.now()
         const reading = withMeasured((await read($, usage))[liveUuid], e.rateLimits, now)
         await update($, usage, map => ({ ...map, [liveUuid]: reading }))
@@ -1157,9 +1272,9 @@ export const register: Register = (on, options) => {
         .then(text => text && $.ui.toast(text))
         .catch((error: unknown) => $.ui.toast(message(error)))
     }
-    // The pane's name once: on the engine's tab while the workspace's pane is open beside it, else here.
-    const isTabbed = (await $.state.get(workspacePaneOpen)).value === true
-    const header = { brand: isTabbed ? '' : paneName(), release: release.version ? m.release(release.version, release.date) : undefined }
+    // With the workspace's pane open beside it, the engine draws a tab row above the header.
+    const isUnderTabs = (await $.state.get(workspacePaneOpen)).value === true
+    const header = { brand: paneName(), release: release.version ? m.release(release.version, release.date) : undefined, isUnderTabs }
     // A dialog takes the whole pane: the header, then the dialog.
     const asked = await read($, dialog)
     const dismiss = async () => {
@@ -1245,7 +1360,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        {Header(ui, header.brand, header.release)}
+        {Header(ui, header)}
         {AccountsTab(
           ui,
           {

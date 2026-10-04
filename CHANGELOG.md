@@ -2,6 +2,33 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.3.1 (2026-10-04)
+
+### All plugins
+
+- With both panes open, Claude Code's tabs read `SC-Accounts` and `SC-Workspace`, and each pane keeps its header, `SimpleCORE Mods: Accounts` or `SimpleCORE Mods: Workspace`, a row below the tabs.
+
+### Accounts (`sc-accounts`)
+
+- After a switch made in another session, a response's usage figures are no longer filed under the account the switch replaced. Each session checks the login Claude Code is configured with before filing them, and looks the account up again when it differs.
+- Switching in one terminal reaches the others within about two seconds, each showing the new account with its own figures: every session watches Claude Code's config, and on a new login reads the live account again and shows the figures the switching session looked up. On macOS without `~/.claude/.credentials.json`, where Claude Code may keep the previous login for up to 30 seconds, a response's figures are not filed for 35 seconds after a switch.
+- An account another session has just switched to cannot be removed, and a removed account's figures leave the readings every session shares.
+- Reading the live login runs once at a time, however many callers ask, and a slow status read is never overlapped by the next.
+- A tool missing on the machine (git, gh, a shell) empties its part of the status instead of stopping every status read; the task and ULTRACODE are read from Claude Code's config directory, so `CLAUDE_CONFIG_DIR` is followed.
+- The status band's gauges are six cells wide, two fewer than the pane's, so the band keeps to one line on narrower terminals.
+- The status band leads with the live account, followed by the model and effort.
+- A lookup of the live account files nothing when the login changed between reading whose it is and asking for its usage.
+- The live account's five-hour and weekly figures follow the session's latest response, which needs no lookup and meets no rate limit; a figure filed wrongly is put right by the next response.
+- On Linux and WSL, writing a saved credential, the live login or the webhook token over a file that already exists narrows it to owner-only (mode 600) first; before, such a file kept the mode it had.
+- On Windows, a removed account's saved credential is deleted by PowerShell's `Remove-Item -LiteralPath`, with the path inside an encoded script, so a path holding `%`, quotes or spaces is deleted as it is.
+- ULTRACODE is read from the session's transcript wherever Claude Code put it: a project folder name over 200 characters is cut and hashed as Claude Code does, and a transcript not in the folder named after the directory (such as one Claude Code named after a path it resolved through a link) is found by searching the project folders. A transcript scan stopped by the time limit is tried again; only a shell that cannot be started stops the reading for good.
+
+### Workspace (`sc-workspace`)
+
+- A reload no longer takes a new "Session start" checkpoint: the session's own start stays the Diff tab's base.
+- On Windows, restoring a checkpoint deletes the files made since it, and the session's snapshot index is deleted when it ends, by PowerShell's `Remove-Item -LiteralPath` with the paths inside an encoded script; worktree paths under the profile directory are shortened to `~`.
+- Pressing a file on the Diff tab no longer leaves the pane blank when its diff is long or has a very long line, such as a changed SVG: each line is cut at 400 characters and the diff at 9,500, under the 10,000 Claude Code draws in one block.
+
 ## 0.3.0 (2026-10-04)
 
 ### All plugins

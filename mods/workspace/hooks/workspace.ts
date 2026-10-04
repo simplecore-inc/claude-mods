@@ -1,5 +1,6 @@
 import type { DiffFile, WorktreeRow } from '../types'
 import { countChanged, parseDiffFiles, parseLeftRight, parseWorktrees } from './git'
+import { removeArgv } from './shared/files'
 
 /** Runs a command by argv and resolves its exit code and output; the hooks module passes one over `$.process.run`. */
 export type Run = (
@@ -117,14 +118,21 @@ export async function fileDiff(run: Run, root: string, from: string, to: string,
  * back, and files made since it are removed. The caller takes a checkpoint of
  * the state it replaces first, so the restore can be undone.
  */
-export async function restoreCheckpoint(run: Run, root: string, commit: string, tree: string, currentTree: string): Promise<number> {
+export async function restoreCheckpoint(
+  run: Run,
+  root: string,
+  commit: string,
+  tree: string,
+  currentTree: string,
+  isWindows = false,
+): Promise<number> {
   await git(run, root, ['restore', `--source=${commit}`, '--worktree', '--', ':/'])
   const made = (await git(run, root, ['diff', '--name-only', '--diff-filter=A', '--no-renames', tree, currentTree]))
     .split('\n')
     .filter(Boolean)
   for (let start = 0; start < made.length; start += 100) {
-    const { exitCode, stderr } = await run(['rm', '-f', '--', ...made.slice(start, start + 100)], { cwd: root })
-    if (exitCode !== 0) throw new GitError(`rm exited ${exitCode}: ${stderr.trim()}`)
+    const { exitCode, stderr } = await run(removeArgv(made.slice(start, start + 100), isWindows), { cwd: root })
+    if (exitCode !== 0) throw new GitError(`deleting the files made since exited ${exitCode}: ${stderr.trim()}`)
   }
 
   return made.length

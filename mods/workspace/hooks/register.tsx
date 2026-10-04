@@ -26,6 +26,7 @@ import {
   snapshotTree,
 } from './workspace'
 import type { Run } from './workspace'
+import { removeArgv } from './shared/files'
 
 const tab = atom({ plugin: 'sc-workspace', key: 'tab' } as const, 'agents')
 const agents = atom({ plugin: 'sc-workspace', key: 'agents' } as const, [])
@@ -49,7 +50,10 @@ const BRAND = 'SimpleCORE Mods'
 /** The mod's name in the pane's title; a name, so it is never translated. */
 const MOD_NAME = 'Workspace'
 
-/** The pane's name, the brand and the mod's: the engine's tab label, and the header's when no tabs show. */
+/** The pane's label on the engine's tab row, shown while another pane is open beside it. */
+const TAB_LABEL = 'SC-Workspace'
+
+/** The pane's name in its header: the brand and the mod's. */
 function paneName(): string {
   return `${BRAND}: ${MOD_NAME}`
 }
@@ -90,6 +94,8 @@ let release: { version?: string; date?: string } = {}
 /** The repository's top directory, or null outside a repository. */
 let root: string | null = null
 let home: string | undefined
+/** Windows proper (not WSL): files are deleted with cmd.exe, which has no `rm`. */
+let isWindows = false
 let sessionId = ''
 /** The checkpoint taken as the session started: the Diff tab's default base. */
 let baseline: CheckpointRow | undefined
@@ -249,7 +255,7 @@ async function restore($: EngineInterface, row: CheckpointRow): Promise<string> 
   if (!root) throw new Error(m.checkpointsNeedGit)
   const before = await takeCheckpoint($, 'restore', m.checkpointKind.restore, true)
   if (!before) throw new Error(m.checkpointsNeedGit)
-  await restoreCheckpoint(runner($), root, row.commit, row.tree, before.tree)
+  await restoreCheckpoint(runner($), root, row.commit, row.tree, before.tree, isWindows)
   await refreshSince($)
   await refreshDiff($)
 
@@ -349,7 +355,7 @@ function scheduleLiveRefresh($: EngineInterface): void {
 
 async function openPane($: EngineInterface, next?: Tab): Promise<void> {
   if (next) await update($, tab, () => next)
-  await $.ui.open({ id: PANE, title: paneName(), rows: 30 })
+  await $.ui.open({ id: PANE, title: TAB_LABEL, rows: 30 })
   if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
   const active = await read($, tab)
   if (active === 'checkpoints') await refreshSince($)
@@ -395,8 +401,10 @@ async function adoptSession($: EngineInterface): Promise<void> {
     await update($, notes, () => (Array.isArray(storedNotes) ? (storedNotes as Note[]) : []))
     const storedCheckpoints = await $.store.get(checkpointsKey(root))
     await update($, checkpoints, () => (Array.isArray(storedCheckpoints) ? (storedCheckpoints as CheckpointRow[]) : []))
+    // A reload runs this again in the same session: its start is the checkpoint already taken, never a new one.
+    const started = (await read($, checkpoints)).find(row => row.kind === 'session' && row.ref.includes(`/${sessionId}/`))
     try {
-      baseline = (await takeCheckpoint($, 'session', m.checkpointKind.session)) ?? (await read($, checkpoints))[0]
+      baseline = started ?? (await takeCheckpoint($, 'session', m.checkpointKind.session)) ?? (await read($, checkpoints))[0]
     } catch (error) {
       debug($, error)
     }
@@ -515,7 +523,9 @@ export const register: Register = (on, options) => {
     locale = resolveLocale(language, [await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG')])
     m = messagesFor(locale)
     release = await readRelease($)
-    home = await $.env.get('HOME')
+    // Windows has USERPROFILE and backslashes; git prints its paths with forward slashes.
+    home = ((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')))?.replaceAll('\\', '/')
+    isWindows = (await $.env.get('OS')) === 'Windows_NT'
     // A pane an earlier build opened and this one no longer draws (the old dialog pane) would
     // stay on screen empty, past the workspace's own Close: close every pane but the workspace.
     for (const pane of await $.ui.panes()) {
@@ -557,7 +567,7 @@ export const register: Register = (on, options) => {
   // up here, once the old one has ended.
   on('session.end', async ($, e, next) => {
     if (snapshotIndex) {
-      await $.process.run(['rm', '-f', '--', snapshotIndex], { timeoutMs: 5000 }).catch((error: unknown) => debug($, error))
+      await $.process.run(removeArgv([snapshotIndex], isWindows), { timeoutMs: 5000 }).catch((error: unknown) => debug($, error))
     }
     const result = await next(e)
     if (e.reason === 'clear') {
@@ -676,9 +686,9 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box } = ui
     const bodyColumns = e.props.bodyColumns ?? 60
-    // The pane's name once: on the engine's tab while the accounts pane is open beside it, else here.
-    const isTabbed = (await $.state.get(accountsPaneOpen)).value === true
-    const header = { brand: isTabbed ? '' : paneName(), release: release.version ? m.release(release.version, release.date) : undefined }
+    // With the accounts pane open beside it, the engine draws a tab row above the header.
+    const isUnderTabs = (await $.state.get(accountsPaneOpen)).value === true
+    const header = { brand: paneName(), release: release.version ? m.release(release.version, release.date) : undefined, isUnderTabs }
     // A dialog in progress takes the whole pane: the header, then the dialog.
     const asked = await read($, dialog)
     const dismiss = async () => {
@@ -750,7 +760,7 @@ export const register: Register = (on, options) => {
         await update($, dialog, () => ({ kind, ref }))
         // The dialog is drawn in this pane, which takes the keys so Enter answers it; Esc
         // asks the pane to close, which the ui.close hook turns into Cancel.
-        await $.ui.open({ id: PANE, title: paneName(), focus: true, closeOnEscape: true })
+        await $.ui.open({ id: PANE, title: TAB_LABEL, focus: true, closeOnEscape: true })
       })()
     const select = (key: string) => act(() => openPane($, key as Tab))()
 
@@ -876,7 +886,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        {Header(ui, header.brand, header.release)}
+        {Header(ui, header)}
         {TabBar(ui, tabs, active, select)}
         {Rule(ui, 'tabs-rule', bodyColumns)}
         <Box key={`body-${active}`} flexDirection="column" marginTop={1}>

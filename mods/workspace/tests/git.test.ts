@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   checkpointRef,
   clipDiff,
+  DIFF_CHARS,
   countChanged,
   isRemovable,
   parseDiffFiles,
@@ -86,4 +87,15 @@ test('labels, refs, paths and clipped diffs', async () => {
   expect(clipDiff('a\nb\nc', 2)).toEqual({ text: 'a\nb', omitted: 1 })
   expect(clipDiff('a', 2)).toEqual({ text: 'a', omitted: 0 })
   expect(clipDiff('@@ -1 +1 @@\n-a\n+b\n', 10)).toEqual({ text: '@@ -1 +1 @@\n-a\n+b', omitted: 0 })
+  // A line of thousands (an SVG, a minified file) is cut and marked; the whole stays within the engine's bound.
+  const long = `+${'x'.repeat(5000)}`
+  const one = clipDiff(`@@ -0,0 +1 @@\n${long}`, 10)
+  expect(one.text).toBe(`@@ -0,0 +1 @@\n+${'x'.repeat(399)}…`)
+  const many = clipDiff(Array.from({ length: 300 }, () => long).join('\n'), 400)
+  expect(many.text.length).toBeLessThanOrEqual(DIFF_CHARS)
+  // Ordinary lines, many of them: the characters stop it before the line limit does.
+  const ordinary = clipDiff(Array.from({ length: 400 }, (_, index) => `+const line${index} = 'an ordinary line of source code here'`).join('\n'), 400)
+  expect(ordinary.text.length).toBeLessThanOrEqual(DIFF_CHARS)
+  expect(ordinary.omitted).toBeGreaterThan(0)
+  expect(many.omitted).toBe(300 - many.text.split('\n').length)
 })

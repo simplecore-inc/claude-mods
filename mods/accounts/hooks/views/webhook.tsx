@@ -3,6 +3,7 @@ import type { ElementTable } from 'claude-code'
 import { WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS, WEBHOOK_VARIABLES } from '../webhook'
 import type { Messages } from '../i18n'
 import { CARD_CHROME, DialogFrame, IconButton, theme, Tiles, Toggle } from '../shared/kit'
+import type { HeaderInfo } from '../shared/kit'
 import { displayWidth, packRows, truncate } from '../shared/layout'
 
 /** The rows of the body preview shown before it is cut. */
@@ -24,7 +25,7 @@ export type WebhookModel = {
   hasField: boolean
   m: Messages
   bodyColumns: number
-  header: { brand: string; release: string | undefined }
+  header: HeaderInfo
   focused: string | null
 }
 

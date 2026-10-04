@@ -40,11 +40,19 @@ const TILE_GAP = 1
 export type Tile = { key: string; label: string; isMain?: boolean; isDismiss?: boolean; isFocused?: boolean; onPress: () => void }
 export type TabSpec = { key: string; label: string; badge?: string; hotkey: string }
 
-export function Header(ui: ElementTable, brand: string, release: string | undefined) {
+/**
+ * What heads a pane: its name, its release, and whether the engine draws its
+ * tab row right above (another pane is open beside it), which the header
+ * keeps a row apart from.
+ */
+export type HeaderInfo = { brand: string; release: string | undefined; isUnderTabs: boolean }
+
+export function Header(ui: ElementTable, header: HeaderInfo) {
   const { Box, Text } = ui
+  const { brand, release } = header
 
   return (
-    <Box key="header" justifyContent="space-between">
+    <Box key="header" justifyContent="space-between" marginTop={header.isUnderTabs ? 1 : 0}>
       <Text bold>{brand}</Text>
       {release && <Text dimColor>{release}</Text>}
     </Box>
@@ -248,7 +256,7 @@ export type DialogLine = { text: string; tone?: 'danger' | 'ok' | 'muted' }
  */
 export function DialogFrame(
   ui: ElementTable,
-  header: { brand: string; release: string | undefined },
+  header: HeaderInfo,
   borderColor: string,
   title: string,
   body: ReturnType<typeof Header>,
@@ -258,7 +266,7 @@ export function DialogFrame(
 
   return (
     <Box key="dialog-pane" flexDirection="column">
-      {Header(ui, header.brand, header.release)}
+      {Header(ui, header)}
       <Box key="dialog" flexDirection="column" marginTop={1} borderStyle="round" borderColor={borderColor} paddingX={1}>
         <Text bold>{title}</Text>
         {body}
@@ -278,7 +286,7 @@ export function DialogFrame(
 export function Dialog(
   ui: ElementTable,
   bodyColumns: number,
-  header: { brand: string; release: string | undefined },
+  header: HeaderInfo,
   title: string,
   lines: DialogLine[],
   confirm: { label: string; onPress: () => void },
@@ -327,7 +335,7 @@ export type Choice = { key: string; label: string; detail?: string; isCurrent?: 
 export function ChoiceDialog(
   ui: ElementTable,
   bodyColumns: number,
-  header: { brand: string; release: string | undefined },
+  header: HeaderInfo,
   title: string,
   choices: Choice[],
   cancel: { label: string; onPress: () => void },

@@ -34,7 +34,7 @@ Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes it
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
 - The footer: **Refresh**, **Add account**, **Webhook** and **Close**.
-- The header names the pane, `SimpleCORE Mods: Accounts`, and shows the version and release date. With the workspace pane open too, Claude Code shows the two as tabs, and the name moves to the tab.
+- The header names the pane, `SimpleCORE Mods: Accounts`, and shows the version and release date. With the workspace pane open too, Claude Code shows the two as tabs, `SC-Accounts` and `SC-Workspace`, and the header stays, a row below the tabs.
 
 ## The status band
 
@@ -42,9 +42,9 @@ Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes it
 
 A band above the prompt, under a dim rule. It stays on one line and wraps only when the terminal is too narrow:
 
+- the live account
 - the model, effort (or ULTRACODE) and fast mode
 - the current task
-- the live account
 - the session's context gauge, and five-hour and weekly usage
 - the directory, branch and PR
 - the lines added and removed, on a filled block
@@ -67,8 +67,8 @@ The mod reads the status itself, so no status line command is needed, and the ro
 | Model | the session's model |
 | Effort | the effort of each main-loop request; before the first, the model's `effortLevel` in `modelSettings`, else `effortLevel` |
 | Fast mode | the `fastMode` setting |
-| ULTRACODE | the session's transcript, where each switch is recorded; only what was appended since the last read is scanned |
-| Task | the in-progress item of the session's newest todo list (`~/.claude/todos/`) |
+| ULTRACODE | the session's transcript, where each switch is recorded; only what was appended since the last read is scanned. It needs a POSIX shell (`sh`, `head`, `tail`, `grep`, `awk`), which Windows has only with Git Bash or WSL; without one, ULTRACODE is not shown |
+| Task | the in-progress item of the session's newest todo list (`todos/` under Claude Code's config directory) |
 | Directory and branch | the session's working directory and `git branch --show-current` |
 | PR | `gh pr view` for the branch, at most every three minutes; nothing without `gh` |
 | Context | the session's context reading |
@@ -140,7 +140,7 @@ The default template takes the shape of Claude Code's status line input (`sessio
 
 ## How it works
 
-- **Storage.** On macOS each saved account's OAuth credential is one keychain item under the service `account-switch`, keyed by account id; the secret travels to `security` on stdin as hex, never in a command line. On Linux, WSL and Windows, where Claude Code keeps its own login in `~/.claude/.credentials.json`, each saved credential is `~/.claude/account-switch/<account id>.json` (`CLAUDE_CONFIG_DIR` replaces `~/.claude`). On Linux and WSL it is written owner-only (mode 600) through stdin; on Windows it inherits the profile directory's access list. Only the account details that hold no secret (the `oauthAccount` value of `~/.claude.json`) are kept in the plugin store.
+- **Storage.** On macOS each saved account's OAuth credential is one keychain item under the service `account-switch`, keyed by account id; the secret travels to `security` on stdin as hex, never in a command line. On Linux, WSL and Windows, where Claude Code keeps its own login in `~/.claude/.credentials.json`, each saved credential is `~/.claude/account-switch/<account id>.json` (`CLAUDE_CONFIG_DIR` replaces `~/.claude`). On Linux and WSL it is written owner-only (mode 600) through stdin, and a file already there is narrowed to 600 before the write; on Windows it inherits the profile directory's access list. Only the account details that hold no secret (the `oauthAccount` value of `~/.claude.json`) are kept in the plugin store.
 - **Switching.** On macOS the chosen credential is written to the keychain item Claude Code reads (`Claude Code-credentials`), and to `~/.claude/.credentials.json` when that file exists; elsewhere it is written to `.credentials.json`. `oauthAccount` in `~/.claude.json` is set to the account's details. Claude Code compares the modification time of `.credentials.json` before it uses a token, so a running session picks up the new login from its next request. Where the file does not exist, the change lands once Claude Code's keychain cache expires (30 seconds).
 - **Telling accounts apart.** When the login changes, the mod asks the profile endpoint whose token it is before filing it, so a token is never saved under the wrong account. Each account's usage is looked up with that account's own token.
 - **Usage lookups.** The automatic lookup runs once every five minutes across the machine, and every running session shares its result. A 429 pauses automatic lookups for `Retry-After`, or without it for five minutes doubling up to an hour. **Refresh** and `/sc:accounts refresh` always look up at once.

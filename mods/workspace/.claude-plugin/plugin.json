@@ -1,12 +1,26 @@
 {
   "name": "sc-workspace",
-  "version": "0.3.0",
+  "displayName": "SimpleCORE Workspace",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "A workspace pane for Claude Code: agents and worktrees, checkpoints, notes and changes in one tabbed pane",
   "author": {
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"
   },
+  "homepage": "https://github.com/simplecore-inc/claude-mods/blob/main/docs/workspace.md",
+  "repository": "https://github.com/simplecore-inc/claude-mods",
+  "keywords": [
+    "claude-code",
+    "workspace",
+    "subagents",
+    "git-worktree",
+    "checkpoints",
+    "notes",
+    "diff",
+    "tui",
+    "mod"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "checkpointEveryPrompt": {

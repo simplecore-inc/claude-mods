@@ -1,3 +1,5 @@
+import { removeArgv } from './shared/files'
+
 /**
  * Where Claude Code keeps its login on this machine. macOS keeps it in the
  * keychain; Linux, WSL and Windows keep it in `<config dir>/.credentials.json`.
@@ -28,14 +30,16 @@ export function vaultFilePath(claudeDirectory: string, vaultName: string, accoun
   return `${claudeDirectory}/${vaultName}/${account}.json`
 }
 
-/** argv writing stdin to `path` with owner-only permissions, on a POSIX shell. */
+/**
+ * argv writing stdin to `path` with owner-only permissions, on a POSIX shell.
+ * The umask covers a new file and folder; a file already there keeps its mode
+ * through `cat >`, so it is narrowed to 600 before the secret goes in.
+ */
 export function privateWriteArgv(path: string): string[] {
-  return ['/bin/sh', '-c', 'umask 077 && mkdir -p "$(dirname "$0")" && cat > "$0"', path]
+  return ['/bin/sh', '-c', 'umask 077 && mkdir -p "$(dirname "$0")" && touch "$0" && chmod 600 "$0" && cat > "$0"', path]
 }
 
 /** argv deleting `path`, absent or not. */
 export function deleteFileArgv(path: string, isWindows: boolean): string[] {
-  return isWindows
-    ? ['cmd.exe', '/d', '/c', 'if', 'exist', path.replaceAll('/', '\\'), 'del', '/f', '/q', path.replaceAll('/', '\\')]
-    : ['rm', '-f', path]
+  return removeArgv([path], isWindows)
 }

@@ -6,7 +6,7 @@
 ![Windows: untested](https://img.shields.io/badge/Windows-untested-lightgrey?logo=windows&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
-Mods for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal. Install one plugin, `sc`, and you get them all.
+Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits, and keep agents, worktrees, checkpoints and diffs in one pane. Install one plugin, `sc`, and you get them all.
 
 ## What's inside
 
@@ -18,7 +18,7 @@ Mods for [Claude Code](https://code.claude.com) that add panes, a status band an
 
 - Keep several Claude logins and switch every running session to another in one step.
 - See each account's five-hour, weekly and per-model usage, with reset times.
-- A status band above the prompt: model, effort, task, account, context and usage, branch and PR, lines changed. Press the account's name to open the accounts pane, or the branch or the lines changed to open the workspace.
+- A status band above the prompt: account, model and effort, task, context and usage, branch and PR, lines changed. Press the account's name to open the accounts pane, or the branch or the lines changed to open the workspace.
 - An optional [webhook](docs/accounts.md#webhook) sends the status to an external system. It is off by default; leave it off if you have nothing to send to.
 
 ### [Workspace](docs/workspace.md) · `/sc:workspace`
