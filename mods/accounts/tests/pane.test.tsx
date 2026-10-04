@@ -41,7 +41,7 @@ function seedState(on: On, extra: Record<string, unknown>): void {
 }
 
 function mountPane($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 120) {
-  return $.ui.mount({ plugin: 'sc', surface, component: 'Pane', requestId: 'account-switch', props: paneProps(bodyColumns) })
+  return $.ui.mount({ plugin: 'sc-accounts', surface, component: 'Pane', requestId: 'account-switch', props: paneProps(bodyColumns) })
 }
 
 test('the pane offers switching only for the accounts not in use', async ($, on) => {
@@ -114,7 +114,7 @@ test('the band above the prompt shows the live account and its usage, left-align
   const band = (bodyColumns: number, hasSurvey = false) =>
     ({ hasSurvey, isWorking: false, maxRows: 10, bodyColumns }) as never
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ plugin: 'sc', surface, component: 'AbovePrompt', props: band(120) })
+    const ui = await $.ui.mount({ plugin: 'sc-accounts', surface, component: 'AbovePrompt', props: band(120) })
     expect((await ui.findAll({ type: 'Text', text: /^━+$/ })).length).toBeGreaterThan(0)
     expect(await ui.find({ type: 'Text', text: 'mina@example.com' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /jun@example/ })).toBeUndefined()
@@ -122,7 +122,7 @@ test('the band above the prompt shows the live account and its usage, left-align
     await ui.unmount()
   }
   // Too narrow for both windows on one row: the weekly window wraps to a second row.
-  const narrow = await $.ui.mount({ plugin: 'sc', surface: 'terminal', component: 'AbovePrompt', props: band(40) })
+  const narrow = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: band(40) })
   expect(await narrow.find({ key: 'status-row-1' })).toBeDefined()
   await narrow.unmount()
 })
@@ -146,7 +146,7 @@ test('with the status line command\'s forward, the band shows its line above the
   })
   const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } as never
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ plugin: 'sc', surface, component: 'AbovePrompt', props })
+    const ui = await $.ui.mount({ plugin: 'sc-accounts', surface, component: 'AbovePrompt', props })
     for (const text of ['Opus5.5', '○ low', '▶ fast', '‣ Writing tests', 'claude-mods', '◇ main', ' #12', '+3', '-1']) {
       expect(await ui.find({ type: 'Text', text })).toBeDefined()
     }
@@ -179,7 +179,7 @@ test('with showStatusBand off, the band is left to the engine', { options: { sho
     return <Text>engine band</Text>
   })
   const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as never
-  const ui = await $.ui.mount({ plugin: 'sc', surface: 'terminal', component: 'AbovePrompt', props })
+  const ui = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props })
   expect(await ui.find({ type: 'Text', text: 'engine band' })).toBeDefined()
   expect(await ui.find({ key: 'status-row-0' })).toBeUndefined()
   await ui.unmount()

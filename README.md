@@ -7,9 +7,11 @@
 
 Mods for [Claude Code](https://code.claude.com): plugins of function hooks that add panes, a status band and slash commands to the terminal. The repository is a local plugin marketplace, `simplecore-mods`, and every mod in it is a self-contained plugin under `mods/<name>/`. The mods share one look: the same header, cards, gauges, buttons and footer.
 
+Installing the plugin `sc` installs every mod: it declares the `/sc:` commands and depends on the mods' own plugins.
+
 | Mod | Plugin | Command | What it does |
 | --- | --- | --- | --- |
-| [Accounts](#accounts) | `sc` | `/sc:accounts` | Keeps several Claude logins, switches between them in one step, and shows every account's usage limits and the session status above the prompt |
+| [Accounts](#accounts) | `sc-accounts` | `/sc:accounts` | Keeps several Claude logins, switches between them in one step, and shows every account's usage limits and the session status above the prompt |
 | [Workspace](#workspace) | `sc-workspace` | `/sc:workspace` | One tabbed pane for the session's agents and worktrees, checkpoints of the working tree, notes, and the changes made |
 
 Only macOS has been tested so far. The code paths for Linux, WSL and Windows exist but have not been run on those systems.
@@ -19,10 +21,9 @@ Only macOS has been tested so far. The code paths for Linux, WSL and Windows exi
 ```bash
 claude plugin marketplace add simplecore-inc/claude-mods
 claude plugin install sc@simplecore-mods
-claude plugin install sc-workspace@simplecore-mods
 ```
 
-The plugins are installed for the user, so they run in every session wherever Claude Code is started. Run `claude plugin update <plugin>@simplecore-mods` and then `/reload-plugins` to take a new version. `/sc:workspace` is declared by `sc`, so the workspace needs both plugins.
+`sc` brings `sc-accounts` and `sc-workspace` with it as dependencies. The plugins are installed for the user, so they run in every session wherever Claude Code is started. Run `claude plugin update <plugin>@simplecore-mods` and then `/reload-plugins` to take a new version.
 
 ### From a local clone
 
@@ -30,14 +31,13 @@ The plugins are installed for the user, so they run in every session wherever Cl
 git clone https://github.com/simplecore-inc/claude-mods.git
 claude plugin marketplace add ./claude-mods
 claude plugin install sc@simplecore-mods
-claude plugin install sc-workspace@simplecore-mods
 ```
 
 A plugin installed from a folder marketplace is read from that folder: after editing a mod, run `/reload-plugins` in a session to pick the change up, with no reinstall. To try a mod in one session without installing it, start Claude Code with `claude --plugin-dir ./claude-mods/mods/<name>`.
 
 ## Accounts
 
-Plugin `sc`, folder `mods/accounts`.
+Plugin `sc-accounts`, folder `mods/accounts`.
 
 
 Keeps several Claude logins on this machine, switches the running sessions to any of them the moment one is chosen, and keeps every account's five-hour, weekly and per-model usage in view. Runs on macOS, Linux, WSL and Windows, storing credentials where Claude Code itself does on each: the keychain on macOS, files under Claude Code's config directory elsewhere.
@@ -160,6 +160,7 @@ Plugin `sc-workspace`, folder `mods/workspace`. One pane with four tabs, opened 
 
 ```
 .claude-plugin/marketplace.json   the marketplace: one entry per mod
+mods/sc/                          the bundle: the /sc: commands, and every mod as a dependency
 shared/                           code every mod uses: UI pieces, layout, time, locale
 scripts/sync-shared.mjs           copies shared/ into each mod's hooks/shared/
 mods/<name>/
@@ -179,7 +180,7 @@ mods/<name>/
 
 - **Commands.** A command is declared as `commands/<command>.md` and answered by a `command.run` hook. Claude Code registers it as `/<plugin>:<command>`, so `commands/accounts.md` in the plugin `sc` is `/sc:accounts`. A name given to `$.command.register` cannot hold a `:`.
 - **`$` stays in one file.** `$`, the engine interface, cannot be passed to a function imported from another file; `claude plugin validate` refuses it. Code that calls `$` lives in `register.tsx`, and only parsing, request building and formatting move to other files, where they are tested directly.
-- **One plugin, one command prefix.** Only one plugin can be named `sc`, so `sc` declares `/sc:workspace` in `commands/workspace.md` and the `sc-workspace` plugin answers it from its own `command.run` hook; a hook may answer a command another plugin declares.
+- **One plugin, one command prefix.** A command's prefix is its plugin's name, and only one plugin can be named `sc`. So `sc` is a bundle with no hooks: it declares every `/sc:` command in `commands/*.md` and lists the mods' plugins under `dependencies`, which `claude plugin install sc` installs with it. Each mod answers its command from its own `command.run` hook; a hook may answer a command another plugin declares.
 - **No imports from outside the plugin.** A plugin may import only files inside its folder, so shared code is copied in. Edit `shared/` and run `node scripts/sync-shared.mjs`; never edit a `hooks/shared/` copy.
 - **Views take the element table, not `$`.** A view is a function of `$.ui.resolve(e)` and plain data, and a git helper takes a runner function the hooks module builds over `$.process.run`; both may live in other files.
 - **Reserved names.** A plugin name cannot start with `claude-`, `anthropic-` or `cc-plugin-`.
@@ -200,4 +201,5 @@ npx -p typescript tsc -p mods/<name>
 
 1. Create `mods/<name>/` with the layout above.
 2. Add an entry to `.claude-plugin/marketplace.json`.
-3. Install it with `claude plugin install <plugin>@simplecore-mods`; the marketplace is already registered.
+3. Add its command to `mods/sc/commands/` and its plugin to the `dependencies` of `mods/sc/.claude-plugin/plugin.json`, so installing `sc` brings it too.
+4. Install it with `claude plugin install <plugin>@simplecore-mods`; the marketplace is already registered.

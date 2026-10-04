@@ -1,5 +1,5 @@
 {
-  "name": "sc",
+  "name": "sc-accounts",
   "version": "0.2.0",
   "description": "Switch between saved Claude logins and watch every account's rate limits",
   "author": {

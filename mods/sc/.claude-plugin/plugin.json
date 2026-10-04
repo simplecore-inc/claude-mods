@@ -1,0 +1,7 @@
+{
+  "name": "sc",
+  "version": "0.1.0",
+  "description": "SimpleCORE Claude Mods: installs every mod and gives them the /sc: commands",
+  "author": { "name": "SimpleCORE", "email": "dev@simplecore.kr" },
+  "dependencies": ["sc-accounts", "sc-workspace"]
+}

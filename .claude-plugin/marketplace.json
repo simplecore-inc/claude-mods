@@ -7,6 +7,11 @@
   "plugins": [
     {
       "name": "sc",
+      "source": "./mods/sc",
+      "description": "SimpleCORE Claude Mods: installs every mod and gives them the /sc: commands"
+    },
+    {
+      "name": "sc-accounts",
       "source": "./mods/accounts",
       "description": "Switch between saved Claude logins and watch every account's usage limits and the session status"
     },

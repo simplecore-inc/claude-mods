@@ -50,7 +50,7 @@ export type StatusInfo = {
 
 declare module 'claude-code' {
   interface PluginState {
-    sc: {
+    'sc-accounts': {
       accounts: AccountView[]
       usage: Record<string, UsageView>
       /** accountUuid of the login Claude Code currently uses, or null. */

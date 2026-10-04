@@ -41,20 +41,20 @@ import type { Credential } from './keychain'
 import { deleteFileArgv, detectPlatform, privateWriteArgv, vaultFilePath } from './platform'
 import type { Platform } from './platform'
 
-const accounts = atom({ plugin: 'sc', key: 'accounts' } as const, [])
-const usage = atom({ plugin: 'sc', key: 'usage' } as const, {})
-const live = atom({ plugin: 'sc', key: 'live' } as const, null)
-const pendingConfirm = atom({ plugin: 'sc', key: 'pendingConfirm' } as const, null)
-const isRefreshing = atom({ plugin: 'sc', key: 'isRefreshing' } as const, false)
-const isGuideOpen = atom({ plugin: 'sc', key: 'isGuideOpen' } as const, false)
-const statusInfo = atom({ plugin: 'sc', key: 'status' } as const, null)
+const accounts = atom({ plugin: 'sc-accounts', key: 'accounts' } as const, [])
+const usage = atom({ plugin: 'sc-accounts', key: 'usage' } as const, {})
+const live = atom({ plugin: 'sc-accounts', key: 'live' } as const, null)
+const pendingConfirm = atom({ plugin: 'sc-accounts', key: 'pendingConfirm' } as const, null)
+const isRefreshing = atom({ plugin: 'sc-accounts', key: 'isRefreshing' } as const, false)
+const isGuideOpen = atom({ plugin: 'sc-accounts', key: 'isGuideOpen' } as const, false)
+const statusInfo = atom({ plugin: 'sc-accounts', key: 'status' } as const, null)
 
 const PANE = 'account-switch'
 /** The product name heading the pane; a name, so it is not translated. */
 const BRAND = 'SimpleCORE Mods'
 /** The `/config` row of the plugin's `showStatusBand` setting. */
-const BAND_SETTING = 'sc.showStatusBand'
-/** `commands/accounts.md` declares it; the plugin's name makes it `/sc:accounts`, and this hook answers it. */
+const BAND_SETTING = 'sc-accounts.showStatusBand'
+/** The plugin `sc` declares /sc:accounts in `commands/accounts.md`; this hook answers it. */
 const COMMAND = 'sc:accounts'
 /** Every session wakes this often: to adopt a new login, and to share or take the automatic lookup. */
 const TICK_MS = 60 * 1000

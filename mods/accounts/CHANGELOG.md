@@ -5,7 +5,7 @@ The release date shown at the top of the accounts pane is read from this file: t
 ## 0.2.0 (2026-10-04)
 
 - Shares one look with the workspace: the pane is drawn from the same header, cards, gauges and footer, and the footer is one row tall with each label centred on one line.
-- Declares `/sc:workspace`, which the `sc-workspace` plugin answers.
+- The plugin is named `sc-accounts`; the bundle plugin `sc` declares `/sc:accounts` and installs this plugin with it. The status band setting is `sc-accounts.showStatusBand`.
 - Saving an account applies the change to the list every session shares, and reading the list puts back any account whose details and credential are still kept, so no session, an older build's included, can drop a saved account.
 
 ## 0.1.0 (2026-10-04)
