@@ -30,7 +30,7 @@ Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes it
 ## The accounts pane
 
 - One card per account, the account in use outlined and marked **active**.
-- A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 10/7(Wed) 11:00 (2d 20h)`. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line.
+- A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 17:00(3h 05m)` today, or `↻ Wed 10/7 11:00(2d 20h)` on another day. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line.
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
 - The footer: **Refresh**, **Add account**, **Webhook** and **Close**.

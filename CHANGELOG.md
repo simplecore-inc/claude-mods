@@ -2,6 +2,17 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.3.2 (2026-10-04)
+
+### All plugins
+
+- A duration shows its second unit in two digits, with a space between the units: `2h 05m`, `5d 04h`. A duration under an hour stays one unit, such as `7m`.
+
+### Accounts (`sc-accounts`)
+
+- The pane's gauges are six cells wide, as the status band's are, so more windows fit on one row.
+- A reset line puts the time left right after the time, without a space: `↻ 17:00(3h 05m)` today, `↻ 10/7(수) 11:00(2d 20h)` or `↻ Wed 10/7 11:00(2d 20h)` on another day.
+
 ## 0.3.1 (2026-10-04)
 
 ### All plugins

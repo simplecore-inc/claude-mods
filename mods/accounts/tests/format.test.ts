@@ -4,7 +4,7 @@ import { padCells, truncate } from '../hooks/shared/layout'
 import { AnthropicError, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
 import { messagesFor } from '../hooks/i18n'
 import { updatedText } from '../hooks/views/accounts'
-import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, untilReset } from '../hooks/format'
+import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, resetText, untilReset } from '../hooks/format'
 
 const NOW = Date.parse('2026-10-04T05:00:00Z')
 
@@ -14,6 +14,9 @@ describe('untilReset', () => {
   })
   test('days and hours', async () => {
     expect(untilReset('2026-10-09T21:00:00Z', NOW)).toBe('5d 16h')
+    expect(untilReset('2026-10-09T09:00:00Z', NOW)).toBe('5d 04h')
+    expect(untilReset('2026-10-04T07:05:00Z', NOW)).toBe('2h 05m')
+    expect(untilReset('2026-10-04T05:07:00Z', NOW)).toBe('7m')
   })
   test('past reset', async () => {
     expect(untilReset('2026-10-04T04:00:00Z', NOW)).toBe('now')
@@ -70,6 +73,22 @@ describe('resetClock', () => {
   test('the local date, not the UTC date, decides today', async () => {
     // 16:30 UTC on the 4th is 01:30 on the 5th in Seoul.
     expect(resetClock('2026-10-04T16:30:00Z', NOW, 'en', KST)).toBe('Mon 10/5 01:30')
+  })
+})
+
+describe('resetText', () => {
+  const KST = -540
+  test('today the time alone, the countdown right after it', async () => {
+    expect(resetText('2026-10-04T08:00:00Z', NOW, 'ko', 'now', KST)).toBe('17:00(3h 00m)')
+  })
+  test('another day keeps the date and weekday', async () => {
+    // 15:49 UTC on the 4th is 00:49 on the 5th in Seoul.
+    expect(resetText('2026-10-04T15:49:00Z', NOW, 'ko', 'now', KST)).toBe('10/5(월) 00:49(10h 49m)')
+    expect(resetText('2026-10-07T02:00:00Z', NOW, 'ko', 'now', KST)).toBe('10/7(수) 11:00(2d 21h)')
+    expect(resetText('2026-10-07T02:00:00Z', NOW, 'en', 'now', KST)).toBe('Wed 10/7 11:00(2d 21h)')
+  })
+  test('a passed reset shows the now label', async () => {
+    expect(resetText('2026-10-04T04:00:00Z', NOW, 'ko', '지금', KST)).toBe('13:00(지금)')
   })
 })
 

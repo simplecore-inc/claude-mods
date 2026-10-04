@@ -99,7 +99,7 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     // A rate-limited account shows one mark and no words.
     expect((await ui.findAll({ type: 'Text', text: /^ ◷$/ })).length).toBe(1)
     expect(await ui.find({ type: 'Text', text: /한도|limited/ })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /^↻ .+ \(\d+d \d+h\)$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^↻ .+\(\d+d \d{2}h\)$/ })).toBeDefined()
     // Fable resets with the weekly window: one reset line for the two.
     expect((await ui.findAll({ type: 'Text', text: /^↻ / })).length).toBe(2)
     // ...and one cell: the weekly cell holds Fable's bar, so Fable has no cell of its own.

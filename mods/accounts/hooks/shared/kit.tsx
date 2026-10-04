@@ -29,7 +29,7 @@ export const theme = {
 }
 
 /** Cells a gauge spans. */
-export const GAUGE_WIDTH = 8
+export const GAUGE_WIDTH = 6
 /** Cells between two cells of a row of gauges. */
 export const CELL_GAP = 3
 /** Cells a card's border and horizontal padding take across. */
