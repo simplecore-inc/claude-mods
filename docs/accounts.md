@@ -17,6 +17,8 @@ Keeps several Claude logins on this machine and switches every running session t
 | `/sc:accounts refresh` | Looks up every account's limits now, past the automatic schedule |
 | `/sc:accounts add` | Explains how to add an account |
 | `/sc:accounts band on\|off` | Shows or hides the status band |
+| `/sc:accounts usage` | Opens the pane on its Usage tab |
+| `/sc:accounts storage` | Opens the pane on its Storage tab |
 | `/sc:accounts webhook` | Opens the webhook settings (optional, see [Webhook](#webhook)) |
 
 ## Adding and switching accounts
@@ -29,11 +31,43 @@ Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes it
 
 ## The accounts pane
 
+The pane has the tabs **Accounts**, **Usage** and **Storage**; a digit switches them.
+
+### Accounts
+
 - One card per account, the account in use outlined and marked **active**.
 - A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 17:00(3h 05m)` today, or `↻ Wed 10/7 11:00(2d 20h)` on another day. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line.
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
+- `Spent past the plan: 12.34 USD of 50.00 USD`: what the account spent beyond its plan, exactly as Claude's usage lookup reports it for that account. It shows only when spending past the plan is on or something was spent; nothing is estimated.
 - The footer: **Refresh**, **Add account**, **Webhook** and **Close**.
+### Usage
+
+![The Usage tab: tokens on this machine by day, model and project](images/accounts-usage.svg)
+
+Tokens used on this machine, every account together, counted from Claude Code's session transcripts, subagents' included:
+
+- The period: the last 7 or 30 days, or everything counted.
+- Input, output, cache read and cache write tokens, the cache reuse (cache reads over input plus cache reads), and the sessions and responses.
+- Tokens by day, as bars, and the top models and projects with their sessions.
+
+The first count reads every transcript and takes a few minutes for gigabytes of them; the tab says how far it has got, and a count stopped by closing the tab goes on where it stopped. After that only what the transcripts gained is read. The counts are kept in `~/.claude/sc-accounts/usage-index.json`. Counting needs a POSIX shell (`sh`, `head`, `tail`, `awk`); on Windows only Git Bash or WSL has one.
+
+### Storage
+
+![The Storage tab: session records by kind and project, and the cleanup](images/accounts-storage.svg)
+
+What Claude Code keeps under `~/.claude`:
+
+- Session transcripts, subagent transcripts, and tool output and images, with their sizes.
+- Each project folder: its sessions, size and last activity.
+- The other folders under `~/.claude` of a megabyte or more.
+- Claude Code's own cleanup: it deletes sessions idle longer than `cleanupPeriodDays` (30 days unless set in `~/.claude/settings.json`).
+
+**Clean up** deletes every session idle longer than the age picked (7, 14, 30 or 90 days): its transcript, its subagents' transcripts and its tool output. The session running here is never deleted. The dialog names how many sessions and how much space, and deletes only when `delete` is typed in it. Every transcript is counted for the Usage tab first, so the usage figures keep their tokens. A deleted session can no longer be resumed.
+
+### The header
+
 - The header names the pane, `SimpleCORE Mods: Accounts`, and shows the version and release date. With the workspace pane open too, Claude Code shows the two as tabs, `SC-Accounts` and `SC-Workspace`, and the header stays, a row below the tabs.
 
 ## The status band

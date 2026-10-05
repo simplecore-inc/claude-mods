@@ -1,6 +1,6 @@
 import type { HttpInit } from 'claude-code'
 
-import type { LimitView, UsageView } from '../types'
+import type { LimitView, Money, SpendView, UsageView } from '../types'
 import type { Messages } from './i18n'
 import type { Credential } from './keychain'
 
@@ -63,6 +63,34 @@ export function parseUsage(body: unknown): LimitView[] {
       ? [{ label, percent: window.utilization, resetsAt: window.resets_at ?? undefined }]
       : [],
   )
+}
+
+type RawMoney = { amount_minor?: unknown; currency?: unknown; exponent?: unknown } | null
+
+/** An amount as the endpoint writes it, or undefined when any part is missing. */
+function moneyOf(raw: RawMoney | undefined): Money | undefined {
+  if (!raw || typeof raw.amount_minor !== 'number' || typeof raw.currency !== 'string' || typeof raw.exponent !== 'number') return undefined
+
+  return { minor: raw.amount_minor, currency: raw.currency, exponent: raw.exponent }
+}
+
+/**
+ * What the account spent past its plan, from the usage endpoint's `spend`:
+ * shown only when spending is on or something was spent, and only with every
+ * part of the amount given. Nothing is estimated.
+ */
+export function parseSpend(body: unknown): SpendView | undefined {
+  const spend = (body as { spend?: { used?: RawMoney; limit?: RawMoney; enabled?: unknown } | null } | null)?.spend
+  const used = moneyOf(spend?.used)
+  if (!spend || !used || (spend.enabled !== true && used.minor === 0)) return undefined
+  const limit = moneyOf(spend.limit)
+
+  return limit ? { used, limit } : { used }
+}
+
+/** An amount in its currency's units, as many decimals as the endpoint says: `12.34 USD`. */
+export function moneyText(money: Money): string {
+  return `${(money.minor / 10 ** money.exponent).toFixed(money.exponent)} ${money.currency}`
 }
 
 /** The usage request: with a bearer token, or with the session's own credential handle. */
@@ -142,12 +170,14 @@ export function parseProfile(text: string): TokenOwner {
  */
 export function failedReading(previous: UsageView | undefined, error: unknown, now: number, m: Messages): UsageView {
   const kept = isLookedUp(previous) ? previous : undefined
+  // The spend kept is the last lookup's too, as the limits are.
+  const spend = kept?.spend ? { spend: kept.spend } : {}
   if (error instanceof AnthropicError && error.status === 429) {
-    return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, isStale: true, source: 'lookup' }
+    return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, isStale: true, source: 'lookup', ...spend }
   }
 
   // The limits kept are the last lookup's, and so is the time they were looked up.
-  return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, error: describeFailure(error, m), source: 'lookup' }
+  return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, error: describeFailure(error, m), source: 'lookup', ...spend }
 }
 
 /** Whether a reading came from its own account's lookup, the one source trusted for its figures. */
@@ -181,7 +211,10 @@ export function withMeasured(previous: UsageView | undefined, windows: MeasuredW
   const labels = new Set(measured.map(limit => limit.label))
   const kept = (isLookedUp(previous) ? previous.limits : []).filter(limit => !labels.has(limit.label))
 
-  return { limits: [...measured, ...kept], fetchedAt: now, source: 'lookup' }
+  // A measured window says nothing of spending: the last lookup's spend stays.
+  const spend = isLookedUp(previous) && previous.spend ? { spend: previous.spend } : {}
+
+  return { limits: [...measured, ...kept], fetchedAt: now, source: 'lookup', ...spend }
 }
 
 /** A failure as the pane shows it. */

@@ -6,6 +6,11 @@
 //   CHANGELOG.md     the one changelog     -> mods/<mod>/CHANGELOG.md
 //   VERSION + date   the release           -> the pane header drawn in docs/images/*.svg
 //
+// --check also holds every view to the shared kit: a file under
+// mods/<mod>/hooks/views/ styles no element itself (colour, fill, border,
+// hover). A view that draws colours it is given, not the theme's, says so
+// with a `ui-check: raw-colours` comment and is passed over.
+//
 // A plugin reads only files inside its own folder, so each source is copied
 // in. The copies are never edited by hand: edit the source, then run this.
 //
@@ -106,6 +111,26 @@ for (const mod of mods) {
       console.log(`removed mods/${mod}/hooks/shared/${name}`)
     }
   }
+}
+
+// Views arrange kit components; styling an element in a view is a shape the kit is missing.
+const RAW_STYLE = /\b(backgroundColor|borderStyle|borderColor|color|hover)=/
+let rawStyles = 0
+for (const mod of isCheck ? mods : []) {
+  const views = join(root, 'mods', mod, 'hooks', 'views')
+  for (const name of existsSync(views) ? readdirSync(views).filter(file => file.endsWith('.tsx')).sort() : []) {
+    const text = readFileSync(join(views, name), 'utf8')
+    if (text.includes('ui-check: raw-colours')) continue
+    text.split('\n').forEach((line, index) => {
+      if (!RAW_STYLE.test(line)) return
+      rawStyles += 1
+      console.error(`styled in a view: mods/${mod}/hooks/views/${name}:${index + 1}: ${line.trim()}`)
+    })
+  }
+}
+if (rawStyles > 0) {
+  console.error(`${rawStyles} element(s) styled in a view; draw them with a component from shared/kit.tsx`)
+  process.exit(1)
 }
 
 if (isCheck && stale > 0) {

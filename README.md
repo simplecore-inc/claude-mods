@@ -6,7 +6,7 @@
 ![Windows: untested](https://img.shields.io/badge/Windows-untested-lightgrey?logo=windows&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
-Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits, and keep agents, worktrees, checkpoints and diffs in one pane. Install one plugin, `sc`, and you get them all.
+Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits and token use, see and clean up what Claude Code keeps on the machine, and keep agents, worktrees, checkpoints, diffs and memory files in one pane. Install one plugin, `sc`, and you get them all.
 
 ## What's inside
 
@@ -17,7 +17,9 @@ Plugins for [Claude Code](https://code.claude.com) that add panes, a status band
 ![The status band above the prompt](docs/images/status-band.svg)
 
 - Keep several Claude logins and switch every running session to another in one step.
-- See each account's five-hour, weekly and per-model usage, with reset times.
+- See each account's five-hour, weekly and per-model usage, with reset times, and what it spent past its plan when Claude reports it.
+- **Usage**: the tokens used on this machine by day, model and project, counted from Claude Code's transcripts.
+- **Storage**: what `~/.claude` holds by kind and project, and a cleanup of idle sessions confirmed by typing a word.
 - A status band above the prompt: account, model and effort, task, context and usage, branch and PR, lines changed. Press the account's name to open the accounts pane, or the branch or the lines changed to open the workspace.
 - An optional [webhook](docs/accounts.md#webhook) sends the status to an external system. It is off by default; leave it off if you have nothing to send to.
 
@@ -25,10 +27,11 @@ Plugins for [Claude Code](https://code.claude.com) that add panes, a status band
 
 ![The workspace pane](docs/images/workspace-pane.svg)
 
-- **Agents**: the session's subagents and the repository's worktrees; stop an agent, remove a merged worktree.
-- **Checkpoints**: a snapshot of the working tree before every prompt; compare with one, or restore it.
-- **Notes**: notes kept per project, optionally sent to Claude with every prompt.
-- **Diff**: the files changed since the session started or since a checkpoint, and each file's diff.
+- **Agents**: the session's subagents, what each did last and the answers of those that finished, and the repository's worktrees; stop an agent, open a worktree's changes, remove a merged one.
+- **Checkpoints**: a snapshot of the working tree before every prompt; compare with one, see one turn's changes, name and pin one, or restore it.
+- **Notes**: numbered notes kept per project, optionally sent to Claude with every prompt; Claude can mark one done for you to confirm.
+- **Diff**: the files changed since the session started or since a checkpoint, up to now or a later checkpoint; each file's diff, restoring one file, and a request for a commit message.
+- **Memory**: the memory files Claude Code reads, global and project apart, to read as Markdown and search line by line.
 
 Anything that cannot be taken back asks in a dialog first; Esc cancels.
 

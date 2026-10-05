@@ -8,6 +8,8 @@ import type { PillSegment } from '../statusline'
 import { STALE_MARK } from './accounts'
 import { Rule } from '../shared/kit'
 
+// ui-check: raw-colours - the band redraws the status line's own ANSI colours, which are data here, not theme.
+
 /** Cells a band gauge spans: narrower than the pane's, so the band keeps to one line longer. */
 const BAR_WIDTH = 6
 /** The xterm-256 ground behind the context gauge. */

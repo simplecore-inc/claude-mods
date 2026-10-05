@@ -2,7 +2,7 @@ import type { ElementTable } from 'claude-code'
 
 import type { Note } from '../../types'
 import type { Messages } from '../i18n'
-import { Card, Empty, IconButton, Section, theme, Toggle } from '../shared/kit'
+import { Card, Empty, IconButton, InputFrame, Section, SubLine, theme, TileButton, Toggle } from '../shared/kit'
 
 export type NotesModel = {
   notes: Note[]
@@ -33,22 +33,30 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
   const openNotes = model.notes.filter(note => !note.isDone).sort(newest)
   const doneNotes = model.notes.filter(note => note.isDone).sort(newest)
   const row = (note: Note) => {
+    // Claude's answer said it finished this one; the person confirms.
+    const isSuggested = note.isSuggestedDone === true && !note.isDone
 
     return (
-      <Box key={`note-${note.id}`} justifyContent="space-between">
-        <Box gap={1} flexShrink={1}>
-          {/* ☐ marks an open note done; ☑ puts a done one back. A done note is struck
-              through: it is no longer sent with prompts, as its group's heading says. */}
-          {IconButton(ui, `toggle-${note.id}`, note.isDone ? '☑' : '☐', theme.ok, () => actions.toggle(note))}
-          <Text dimColor={note.isDone} strikethrough={note.isDone} wrap="wrap">
-            {note.text}
-          </Text>
+      <Box key={`note-${note.id}`} flexDirection="column">
+        <Box justifyContent="space-between">
+          <Box gap={1} flexShrink={1}>
+            {/* ☐ marks an open note done; ☑ puts a done one back. A done note is struck
+                through: it is no longer sent with prompts, as its group's heading says. */}
+            {IconButton(ui, `toggle-${note.id}`, note.isDone ? '☑' : '☐', theme.ok, () => actions.toggle(note))}
+            {/* Its number is how Claude names it: `[done N3]`. */}
+            {note.seq !== undefined && <Text dimColor>{`N${note.seq}`}</Text>}
+            <Text dimColor={note.isDone} strikethrough={note.isDone} wrap="wrap">
+              {note.text}
+            </Text>
+          </Box>
+          <Box gap={2} flexShrink={0}>
+            {isSuggested && TileButton(ui, `confirm-done-${note.id}`, m.confirmDone, () => actions.toggle(note))}
+            {IconButton(ui, `insert-${note.id}`, '↵', theme.accent, () => actions.insert(note))}
+            {/* Deleting asks in a dialog first. */}
+            {IconButton(ui, `remove-note-${note.id}`, '✕', theme.danger, () => actions.remove(note))}
+          </Box>
         </Box>
-        <Box gap={2} flexShrink={0}>
-          {IconButton(ui, `insert-${note.id}`, '↵', theme.accent, () => actions.insert(note))}
-          {/* Deleting asks in a dialog first. */}
-          {IconButton(ui, `remove-note-${note.id}`, '✕', theme.danger, () => actions.remove(note))}
-        </Box>
+        {isSuggested && SubLine(ui, `suggested-${note.id}`, m.noteSuggestedDone)}
       </Box>
     )
   }
@@ -61,9 +69,14 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
       </Text>
       {Input ? (
         // A bordered field in the accent colour, so it reads as the place to type.
-        <Box key="notes-input" marginY={1} borderStyle="round" borderColor={theme.accent} paddingX={1} gap={1}>
-          <Text color={theme.accent}>✎</Text>
-          <Input key="note-new" placeholder={m.notePlaceholder} submitLabel={m.noteAdd} onSubmit={value => actions.add(value)} />
+        <Box key="notes-input" marginY={1}>
+          {InputFrame(
+            ui,
+            'notes-input-frame',
+            true,
+            <Input key="note-new" placeholder={m.notePlaceholder} submitLabel={m.noteAdd} onSubmit={value => actions.add(value)} />,
+            '✎',
+          )}
         </Box>
       ) : (
         <Text key="notes-no-input" dimColor>

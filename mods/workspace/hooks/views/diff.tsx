@@ -1,9 +1,10 @@
 import type { ElementTable } from 'claude-code'
 
-import type { CheckpointRow, DiffFile, DiffView } from '../../types'
+import type { CheckpointRow, DiffFile, DiffPoint, DiffView } from '../../types'
 import type { Locale, Messages } from '../i18n'
 import { clockOf, sinceText } from './checkpoints'
-import { Card, Empty, IconButton, Section, theme } from '../shared/kit'
+import type { Tone } from '../shared/kit'
+import { Card, ChangeBar, ChangeCounts, Empty, IconButton, LinkButton, Section, SelectField, theme, Toned } from '../shared/kit'
 import { displayWidth, padCells, truncate } from '../shared/layout'
 
 export type DiffModel = {
@@ -20,13 +21,19 @@ export type DiffActions = {
   closeFile: () => void
   /** Opens the dialog that picks the checkpoint the changes are compared with. */
   chooseBase: () => void
+  /** Opens the dialog that picks what the changes are compared up to: the working tree or a later checkpoint. */
+  chooseTarget: () => void
+  /** Asks to put the open file back as it was at the base. */
+  restoreFile: (path: string) => void
+  /** Leaves another worktree's changes for this one's. */
+  closeWorktree: () => void
 }
 
-const STATUS_MARK: Record<DiffFile['status'], { letter: string; color: string }> = {
-  added: { letter: 'A', color: theme.ok },
-  modified: { letter: 'M', color: theme.warn },
-  deleted: { letter: 'D', color: theme.danger },
-  renamed: { letter: 'R', color: theme.accent },
+const STATUS_MARK: Record<DiffFile['status'], { letter: string; tone: Tone }> = {
+  added: { letter: 'A', tone: 'ok' },
+  modified: { letter: 'M', tone: 'warn' },
+  deleted: { letter: 'D', tone: 'danger' },
+  renamed: { letter: 'R', tone: 'accent' },
 }
 
 /**
@@ -73,6 +80,47 @@ export function baseChoices(candidates: BaseCandidate[], current: DiffView['base
   }))
 }
 
+/** What the changes are compared up to, as the header and the target dialog name it. */
+export function targetLabel(target: DiffPoint | undefined, now: number, locale: Locale, m: Messages): string {
+  return target ? baseLabel(target, now, locale) : m.workingTree
+}
+
+/**
+ * The target dialog's choices: the working tree first, then every checkpoint
+ * taken after the base, newest first; the target in use is marked. `target`
+ * is null for the working tree.
+ */
+export function targetChoices(candidates: DiffPoint[], diff: Pick<DiffView, 'base' | 'target'>, now: number, locale: Locale, m: Messages) {
+  const later = candidates.filter(one => one.at > diff.base.at && one.commit !== diff.base.commit).sort((a, b) => b.at - a.at)
+
+  return [
+    { key: 'target-now', label: m.workingTree, isCurrent: diff.target === undefined, target: null },
+    ...later.map(point => ({
+      key: `target-${point.commit}`,
+      label: baseLabel(point, now, locale),
+      isCurrent: diff.target?.commit === point.commit,
+      target: point,
+    })),
+  ]
+}
+
+/** The prompt that asks Claude for a commit message: the range compared and each file with its counts. */
+export function commitPrompt(diff: DiffView, now: number, locale: Locale, m: Messages): string {
+  const range = diff.worktree
+    ? m.draftCommitRange(diff.base.label, `${diff.worktree.branch} (${diff.worktree.path})`)
+    : m.draftCommitRange(baseLabel(diff.base, now, locale), targetLabel(diff.target, now, locale, m))
+  const files = diff.files
+    .map(file => {
+      const counts = file.added === null ? m.binary : `+${file.added} −${file.removed ?? 0}`
+      const path = file.from ? `${file.from} → ${file.path}` : file.path
+
+      return `- ${STATUS_MARK[file.status].letter} ${path} (${counts})`
+    })
+    .join('\n')
+
+  return m.draftCommitPrompt(range, files)
+}
+
 /** Cells of the per-file change bar. */
 const CHANGE_BAR = 10
 
@@ -87,10 +135,11 @@ export function changeCells(file: DiffFile, largest: number): { added: number; r
 }
 
 export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions) {
-  const { Box, Text, Button } = ui
+  const { Box, Text } = ui
   const { m, diff } = model
   if (model.repoError) return Empty(ui, 'diff-error', [model.repoError, m.checkpointsNeedGit])
   if (!diff) return Empty(ui, 'diff-loading', [m.loading])
+  const selected = diff.selected
   const largest = Math.max(0, ...diff.files.map(file => (file.added ?? 0) + (file.removed ?? 0)))
   const added = diff.files.reduce((sum, file) => sum + (file.added ?? 0), 0)
   const removed = diff.files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
@@ -105,27 +154,26 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
   return (
     <Box key="diff" flexDirection="column">
       {/* What is compared stays in view; pressing it opens the dialog that picks another checkpoint. */}
-      <Box key="diff-head" gap={1}>
-        {Section(ui, 'diff-title', m.diffTitle)}
-        <Text dimColor>{m.diffBaseLabel}</Text>
-        {/* The base reads as a select: on the tabs' background, lighter under the pointer. */}
-        <Box key="diff-base-field" paddingX={1} flexShrink={0} backgroundColor={theme.switchOff} hover={{ backgroundColor: theme.tabActive }}>
-          <Button
-            key="diff-base"
-            label={`${baseLabel(diff.base, model.now, model.locale)} ▾`}
-            plain
-            hover={{ color: theme.accent, bold: true }}
-            onPress={actions.chooseBase}
-          />
+      {diff.worktree ? (
+        // Another worktree's changes: counted from where its branch parted from the main one.
+        <Box key="diff-head" gap={1} flexWrap="wrap">
+          {Section(ui, 'diff-title', m.worktreeDiffTitle(diff.worktree.branch), m.worktreeDiffSince(diff.base.label))}
+          {IconButton(ui, 'diff-worktree-close', '✕', theme.accent, actions.closeWorktree)}
         </Box>
-      </Box>
+      ) : (
+        <Box key="diff-head" gap={1} flexWrap="wrap">
+          {Section(ui, 'diff-title', m.diffTitle)}
+          <Text dimColor>{m.diffBaseLabel}</Text>
+          {SelectField(ui, 'diff-base', baseLabel(diff.base, model.now, model.locale), actions.chooseBase)}
+          <Text dimColor>{m.diffTargetLabel}</Text>
+          {SelectField(ui, 'diff-target', targetLabel(diff.target, model.now, model.locale, m), actions.chooseTarget)}
+        </Box>
+      )}
       {diff.files.length === 0 && Empty(ui, 'diff-empty', [m.diffEmpty])}
       {diff.files.length > 0 && (
         <Text key="diff-totals">
           <Text dimColor>{`${m.filesCount(diff.files.length)}  `}</Text>
-          <Text color={theme.ok}>{`+${added}`}</Text>
-          <Text> </Text>
-          <Text color={theme.danger}>{`−${removed}`}</Text>
+          {ChangeCounts(ui, 'diff-totals-counts', added, removed)}
         </Text>
       )}
       {diff.files.length > 0 &&
@@ -143,19 +191,11 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
               return (
                 <Box key={`file-${file.path}`} justifyContent="space-between">
                   <Box gap={1} flexShrink={1}>
-                    <Text color={mark.color} bold>
-                      {mark.letter}
-                    </Text>
+                    {Toned(ui, `file-mark-${file.path}`, mark.letter, mark.tone, { isBold: true })}
                     {/* The file's name is the button. Its folder is drawn with `›`, not `/`:
                         a terminal turns a path into a link of its own and takes the click. */}
                     {/* The name at full strength, the folder dim: the two never read as one. */}
-                    <Button
-                      key={`file-open-${file.path}`}
-                      label={`${isSelected ? '▾' : '▸'} ${padCells(name, nameWidth)}`}
-                      plain
-                      hover={{ color: theme.accent, bold: true }}
-                      onPress={() => actions.select(file.path)}
-                    />
+                    {LinkButton(ui, `file-open-${file.path}`, `${isSelected ? '▾' : '▸'} ${padCells(name, nameWidth)}`, () => actions.select(file.path))}
                     {folder !== '' && (
                       <Text dimColor wrap="truncate-end">
                         {folder}
@@ -163,15 +203,13 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
                     )}
                   </Box>
                   <Text>
-                    <Text color={theme.ok}>{'■'.repeat(cells.added)}</Text>
-                    <Text color={theme.danger}>{'■'.repeat(cells.removed)}</Text>
-                    <Text dimColor>{'·'.repeat(Math.max(0, CHANGE_BAR - cells.added - cells.removed))}</Text>
+                    {ChangeBar(ui, `file-bar-${file.path}`, cells, CHANGE_BAR)}
                     {file.added === null ? (
                       <Text dimColor>{`  ${m.binary}`.padEnd(countsWidth)}</Text>
                     ) : (
                       <Text>
-                        <Text color={theme.ok}>{`  ${`+${file.added}`.padStart(addedWidth)}`}</Text>
-                        <Text color={theme.danger}>{` ${`−${file.removed}`.padStart(removedWidth)}`}</Text>
+                        <Text>{'  '}</Text>
+                        {ChangeCounts(ui, `file-counts-${file.path}`, file.added, file.removed ?? 0, { added: addedWidth, removed: removedWidth })}
                       </Text>
                     )}
                   </Text>
@@ -180,22 +218,26 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
             })}
           </Box>,
         )}
-      {diff.selected &&
+      {selected &&
         Card(
           ui,
           'diff-file',
           true,
           <Box flexDirection="column">
             <Box justifyContent="space-between">
-              <Text bold>{diff.selected.path}</Text>
-              {IconButton(ui, 'diff-file-close', '✕', theme.accent, actions.closeFile)}
+              <Text bold>{selected.path}</Text>
+              <Box gap={1} flexShrink={0}>
+                {/* Only the working tree can be written back: a file compared between two checkpoints has no restore. */}
+                {!diff.target && !diff.worktree && IconButton(ui, 'diff-file-restore', '↺', theme.danger, () => actions.restoreFile(selected.path))}
+                {IconButton(ui, 'diff-file-close', '✕', theme.accent, actions.closeFile)}
+              </Box>
             </Box>
-            {diff.selected.text.trim() === '' ? (
+            {selected.text.trim() === '' ? (
               <Text dimColor>{m.binary}</Text>
             ) : (
-              <ui.Code source={diff.selected.text} format="diff" path={diff.selected.path} />
+              <ui.Code source={selected.text} format="diff" path={selected.path} />
             )}
-            {diff.selected.omitted > 0 && <Text dimColor>{m.linesOmitted(diff.selected.omitted)}</Text>}
+            {selected.omitted > 0 && <Text dimColor>{m.linesOmitted(selected.omitted)}</Text>}
           </Box>,
         )}
     </Box>

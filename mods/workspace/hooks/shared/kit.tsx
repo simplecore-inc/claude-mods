@@ -26,6 +26,19 @@ export const theme = {
   switchOn: '#1f7a3a',
   switchOffActive: '#5a606b',
   switchOff: '#2a2f38',
+  /** Dark grounds behind glyph buttons, one per meaning, so a button reads at rest. */
+  glyphAccent: '#1d5566',
+  glyphDanger: '#6b2a31',
+  glyphWarn: '#6b5719',
+  glyphOk: '#28603a',
+}
+
+/** The ground behind a glyph button of each tone; any other tone takes the neutral fill. */
+const GLYPH_GROUND: Record<string, string> = {
+  [theme.accent]: theme.glyphAccent,
+  [theme.danger]: theme.glyphDanger,
+  [theme.warn]: theme.glyphWarn,
+  [theme.ok]: theme.glyphOk,
 }
 
 /** Cells a gauge spans. */
@@ -122,6 +135,90 @@ export function Card(ui: ElementTable, key: string, isAccent: boolean, children:
   )
 }
 
+/** What a piece of text means, which sets its colour. */
+export type Tone = 'accent' | 'ok' | 'danger' | 'warn' | 'stale'
+
+/**
+ * Text in the colour of what it means: current or selected `accent`, added or
+ * done `ok`, removed or failed `danger`, changed or waiting `warn`, an old
+ * reading `stale`; no tone for plain text. Drawn inside another Text or alone.
+ */
+export function Toned(
+  ui: ElementTable,
+  key: string,
+  text: string,
+  tone?: Tone,
+  style: { isDim?: boolean; isBold?: boolean; wrap?: 'wrap' | 'truncate-end' } = {},
+) {
+  const { Text } = ui
+
+  return (
+    <Text key={key} color={tone ? theme[tone] : undefined} dimColor={style.isDim === true} bold={style.isBold === true} {...(style.wrap ? { wrap: style.wrap } : {})}>
+      {text}
+    </Text>
+  )
+}
+
+/**
+ * Lines added and removed, `+12 −3`, in green and red. With widths, each
+ * figure is padded at the start to its column, so rows line up.
+ */
+export function ChangeCounts(ui: ElementTable, key: string, added: number, removed: number, widths: { added: number; removed: number } = { added: 0, removed: 0 }) {
+  const { Text } = ui
+
+  return (
+    <Text key={key}>
+      {Toned(ui, `${key}-added`, `+${added}`.padStart(widths.added), 'ok')}
+      <Text> </Text>
+      {Toned(ui, `${key}-removed`, `−${removed}`.padStart(widths.removed), 'danger')}
+    </Text>
+  )
+}
+
+/** A bar of `width` cells: added cells green, removed cells red, the rest a dim dotted track. */
+export function ChangeBar(ui: ElementTable, key: string, cells: { added: number; removed: number }, width: number) {
+  const { Text } = ui
+
+  return (
+    <Text key={key}>
+      {Toned(ui, `${key}-added`, '■'.repeat(cells.added), 'ok')}
+      {Toned(ui, `${key}-removed`, '■'.repeat(cells.removed), 'danger')}
+      {Toned(ui, `${key}-rest`, '·'.repeat(Math.max(0, width - cells.added - cells.removed)), undefined, { isDim: true })}
+    </Text>
+  )
+}
+
+/**
+ * The frame around a text input: round, in the accent colour where it is
+ * the place to type, dim otherwise; an optional glyph before the input. It
+ * takes the whole width it is given, in a row or a column alike.
+ */
+export function InputFrame(ui: ElementTable, key: string, isAccent: boolean, input: unknown, glyph?: string) {
+  const { Box, Text } = ui
+
+  return (
+    <Box
+      key={key}
+      borderStyle="round"
+      borderColor={isAccent ? theme.accent : 'gray'}
+      borderDimColor={!isAccent}
+      paddingX={1}
+      gap={1}
+      flexGrow={1}
+    >
+      {glyph && <Text color={isAccent ? theme.accent : undefined}>{glyph}</Text>}
+      {input as never}
+    </Box>
+  )
+}
+
+/** A word that is pressed: plain at rest, accent and bold under the pointer. */
+export function LinkButton(ui: ElementTable, key: string, label: string, onPress: () => void, extra: { autoFocus?: boolean } = {}) {
+  const { Button } = ui
+
+  return <Button key={key} label={label} plain hover={{ color: theme.accent, bold: true }} {...(extra.autoFocus ? { autoFocus: true as const } : {})} onPress={onPress} />
+}
+
 /** A section heading: a title, and a dim detail after it. */
 export function Section(ui: ElementTable, key: string, title: string, detail?: string) {
   const { Text } = ui
@@ -151,11 +248,22 @@ export function Gauge(ui: ElementTable, key: string, label: string, percent: num
   )
 }
 
-/** A glyph button: dim at rest, its tone under the pointer. */
-export function IconButton(ui: ElementTable, key: string, glyph: string, tone: string, onPress: () => void) {
-  const { Button } = ui
+/**
+ * A glyph button: the glyph at full strength on a dark ground of its tone's
+ * colour (red to delete or stop, yellow to restore or pin, cyan to compare or
+ * open, green to finish), so what it does reads at rest; the glyph takes the
+ * tone under the pointer. A switch that is off (an unpinned star) sits on the
+ * neutral fill. One cell wide, as the glyph alone.
+ */
+export function IconButton(ui: ElementTable, key: string, glyph: string, tone: string, onPress: () => void, isOff = false) {
+  const { Box, Button } = ui
+  const ground = isOff ? theme.tile : (GLYPH_GROUND[tone] ?? theme.tile)
 
-  return <Button key={key} label={glyph} plain dimColor hover={{ color: tone, bold: true }} onPress={onPress} />
+  return (
+    <Box key={`${key}-ground`} flexShrink={0} backgroundColor={ground} hover={{ backgroundColor: theme.tileHover }}>
+      <Button key={key} label={glyph} plain hover={{ color: tone, bold: true }} onPress={onPress} />
+    </Box>
+  )
 }
 
 /**
@@ -168,6 +276,156 @@ export function TileButton(ui: ElementTable, key: string, label: string, onPress
   return (
     <Box key={`${key}-tile`} paddingX={1} backgroundColor={theme.tileMain} hover={{ backgroundColor: theme.tileHover }}>
       <Button key={key} label={label} plain onPress={onPress} />
+    </Box>
+  )
+}
+
+/**
+ * A value that opens a choice dialog when pressed, drawn as a select: the
+ * value and `▾` on the unselected tabs' fill, one cell of padding each side,
+ * lighter under the pointer. It never shrinks; the row it sits in gives way.
+ */
+export function SelectField(ui: ElementTable, key: string, value: string, onPress: () => void) {
+  const { Box } = ui
+
+  return (
+    <Box key={`${key}-field`} paddingX={1} flexShrink={0} backgroundColor={theme.switchOff} hover={{ backgroundColor: theme.tabActive }}>
+      {LinkButton(ui, key, `${value} ▾`, onPress)}
+    </Box>
+  )
+}
+
+/**
+ * A dim second line under a row, indented under its text and cut to one
+ * line: what a row did last, or a fact that does not fit beside it.
+ */
+export function SubLine(ui: ElementTable, key: string, text: string) {
+  const { Box, Text } = ui
+
+  return (
+    <Box key={key} paddingLeft={2}>
+      <Text dimColor wrap="truncate-end">
+        {`↳ ${text.replace(/\s+/g, ' ').trim()}`}
+      </Text>
+    </Box>
+  )
+}
+
+/**
+ * Figures in a row: each value bold with its name dim after it, the row
+ * wrapping whole figures to the next line where the width runs out.
+ */
+export function StatRow(ui: ElementTable, key: string, items: { label: string; value: string }[]) {
+  const { Box, Text } = ui
+
+  return (
+    <Box key={key} columnGap={3} flexWrap="wrap">
+      {items.map(item => (
+        <Text key={`${key}-${item.label}`}>
+          <Text bold>{item.value}</Text>
+          <Text dimColor>{` ${item.label}`}</Text>
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+/** Eighths of a cell, from empty to full, for the bars of a chart. */
+const BAR_EIGHTHS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
+
+/**
+ * Vertical bars `height` rows tall, one per value, in the accent colour, drawn
+ * with eighth blocks so a small value still shows; each bar is as wide as
+ * `width` allows (one or two cells, a cell between bars), with its label
+ * under it when the bar is two cells wide and on every fifth bar otherwise.
+ * The largest value is named above the bars.
+ */
+export function BarChart(ui: ElementTable, key: string, bars: { label: string; value: number }[], width: number, height: number, largestText: string) {
+  const { Box, Text } = ui
+  const largest = Math.max(1, ...bars.map(bar => bar.value))
+  const barWidth = bars.length * 3 - 1 <= width ? 2 : 1
+  const eighths = bars.map(bar => (bar.value > 0 ? Math.max(1, Math.round((bar.value / largest) * height * 8)) : 0))
+  const rows = Array.from({ length: height }, (_, index) => height - 1 - index)
+  const cell = (filled: number, row: number) => BAR_EIGHTHS[Math.max(0, Math.min(8, filled - row * 8))] ?? ' '
+
+  return (
+    <Box key={key} flexDirection="column">
+      <Text dimColor>{largestText}</Text>
+      {rows.map(row => (
+        <Text key={`${key}-row-${row}`} color={theme.accent}>
+          {eighths.map(filled => cell(filled, row).repeat(barWidth)).join(' ')}
+        </Text>
+      ))}
+      <Text key={`${key}-labels`} dimColor>
+        {barWidth === 2
+          ? bars.map(bar => bar.label.slice(-2).padStart(2)).join(' ')
+          : // One-cell bars sit two cells apart: a two-character label fits under every fifth.
+            bars.reduce((line, bar, index) => (index % 5 === 0 ? padCells(line, index * 2) + bar.label.slice(-2) : line), '')}
+      </Text>
+    </Box>
+  )
+}
+
+/**
+ * A ranking, one row each: the name, a dim detail after it, and the value at
+ * the right edge; the name is cut to what the value and detail leave.
+ */
+export function RankList(ui: ElementTable, key: string, rows: { name: string; detail: string; value: string; onPress?: () => void }[], width: number) {
+  const { Box, Text } = ui
+  const valueWidth = Math.max(0, ...rows.map(row => displayWidth(row.value)))
+
+  return (
+    <Box key={key} flexDirection="column">
+      {rows.map((row, index) => {
+        const room = Math.max(6, width - valueWidth - displayWidth(row.detail) - 4)
+
+        // Rows are keyed by place: two rows may share a name (one line found in two files).
+        return (
+          <Box key={`${key}-${index}`} justifyContent="space-between">
+            {/* A row that opens something has its name as the button. */}
+            {row.onPress ? (
+              <Box gap={2} flexShrink={1}>
+                {LinkButton(ui, `${key}-${index}-open`, truncate(row.name, room), row.onPress)}
+                <Text dimColor wrap="truncate-end">
+                  {row.detail}
+                </Text>
+              </Box>
+            ) : (
+              <Text wrap="truncate-end">
+                <Text>{truncate(row.name, room)}</Text>
+                <Text dimColor>{`  ${row.detail}`}</Text>
+              </Text>
+            )}
+            <Box flexShrink={0} marginLeft={1}>
+              <Text bold>{padCells(row.value, valueWidth, 'start')}</Text>
+            </Box>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
+/**
+ * A file's outline under its row: each entry's line number dim in one
+ * column, then its text indented by its depth, every entry one line.
+ */
+export function OutlineList(ui: ElementTable, key: string, entries: { line: number; text: string; level: number }[], width: number) {
+  const { Box, Text } = ui
+  const numberWidth = Math.max(0, ...entries.map(entry => String(entry.line).length))
+
+  return (
+    <Box key={key} flexDirection="column" paddingLeft={2}>
+      {entries.map(entry => {
+        const indent = '  '.repeat(Math.max(0, entry.level - 1))
+
+        return (
+          <Text key={`${key}-${entry.line}`} wrap="truncate-end">
+            <Text dimColor>{`${String(entry.line).padStart(numberWidth)}  `}</Text>
+            <Text>{truncate(`${indent}${entry.text}`, Math.max(6, width - numberWidth - 4))}</Text>
+          </Text>
+        )
+      })}
     </Box>
   )
 }
@@ -323,6 +581,106 @@ export function Dialog(
   )
 }
 
+/**
+ * A dialog that asks for a line of text, drawn like the others: the title,
+ * the facts the answer is about, a bordered input that holds the keyboard,
+ * and Cancel. Enter submits. Where the surface has no input, `noInput` says
+ * how else to give the text.
+ */
+export function InputDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: HeaderInfo,
+  title: string,
+  lines: DialogLine[],
+  input: {
+    key: string
+    placeholder: string
+    value?: string
+    submitLabel: string
+    onSubmit: (value: string) => void
+    /** Whether the surface draws a text field: every surface but mobile. */
+    hasField: boolean
+    noInput: string
+  },
+  cancel: { label: string; onPress: () => void },
+  focused: string | null = null,
+) {
+  const { Box } = ui
+  // The mobile app draws no input: there the dialog says how else to give the text.
+  const Input = input.hasField && 'Input' in ui ? ui.Input : undefined
+
+  return DialogFrame(
+    ui,
+    header,
+    theme.accent,
+    title,
+    <Box key="dialog-input-body" flexDirection="column" marginTop={1}>
+      {lines.map((line, index) => Toned(ui, `dialog-line-${index}`, line.text, line.tone === 'danger' ? 'danger' : line.tone === 'ok' ? 'ok' : undefined, { isDim: line.tone === 'muted', wrap: 'wrap' }))}
+      <Box key="dialog-input-row" marginTop={1}>
+        {Input
+          ? InputFrame(
+              ui,
+              'dialog-input-frame',
+              true,
+              <Input
+                key={input.key}
+                placeholder={input.placeholder}
+                {...(input.value !== undefined ? { value: input.value } : {})}
+                submitLabel={input.submitLabel}
+                autoFocus
+                onSubmit={input.onSubmit}
+              />,
+              '✎',
+            )
+          : Toned(ui, 'dialog-no-input', input.noInput, undefined, { isDim: true, wrap: 'wrap' })}
+      </Box>
+    </Box>,
+    Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), [{ key: 'dialog-cancel', label: cancel.label, isDismiss: true, onPress: cancel.onPress }], { focused }),
+  )
+}
+
+/**
+ * A dialog that reads a document: its title and a dim line under it, one
+ * page of its Markdown drawn as a reply is, and tiles to the previous and
+ * next page, with the page's number, and Close. The engine's Markdown takes
+ * at most 10,000 characters, so a longer document comes in pages.
+ */
+export function ReaderDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: HeaderInfo,
+  title: string,
+  subtitle: string,
+  markdown: string,
+  page: { index: number; count: number; label: string },
+  actions: { previous: { label: string; onPress: () => void }; next: { label: string; onPress: () => void }; close: { label: string; onPress: () => void } },
+  focused: string | null = null,
+) {
+  const { Box, Markdown, Text } = ui
+  const tiles: Tile[] = [
+    ...(page.index > 0 ? [{ key: 'reader-previous', label: actions.previous.label, onPress: actions.previous.onPress }] : []),
+    ...(page.index < page.count - 1 ? [{ key: 'reader-next', label: actions.next.label, isMain: true, onPress: actions.next.onPress }] : []),
+    { key: 'dialog-cancel', label: actions.close.label, isDismiss: true, onPress: actions.close.onPress },
+  ]
+
+  return DialogFrame(
+    ui,
+    header,
+    theme.accent,
+    title,
+    <Box key="reader-body" flexDirection="column">
+      <Text dimColor wrap="truncate-end">
+        {page.count > 1 ? `${subtitle} · ${page.label}` : subtitle}
+      </Text>
+      <Box key="reader-page" flexDirection="column" marginTop={1}>
+        <Markdown key="reader-markdown" text={markdown} />
+      </Box>
+    </Box>,
+    Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), tiles, { focused }),
+  )
+}
+
 /** One choice of a choice dialog: what pressing it picks, and a dim detail beside it. */
 export type Choice = { key: string; label: string; detail?: string; isCurrent?: boolean; onPress: () => void }
 
@@ -344,7 +702,7 @@ export function ChoiceDialog(
   /** The key of the element holding the keyboard, so the Cancel tile can show it. */
   focused: string | null = null,
 ) {
-  const { Box, Button, Text } = ui
+  const { Box, Text } = ui
   // Every row is one line: the details share one column at the right, and the labels
   // take what is left of the dialog's width and are cut to it, never wrapped.
   const detailWidth = Math.max(0, ...choices.map(choice => displayWidth(choice.detail ?? '')))
@@ -363,14 +721,7 @@ export function ChoiceDialog(
           <Text color={choice.isCurrent ? theme.accent : undefined} dimColor={!choice.isCurrent}>
             {choice.isCurrent ? '●' : '○'}
           </Text>
-          <Button
-            key={choice.key}
-            label={padCells(labels[index] ?? '', labelWidth)}
-            plain
-            hover={{ color: theme.accent, bold: true }}
-            {...(choice.isCurrent ? { autoFocus: true as const } : {})}
-            onPress={choice.onPress}
-          />
+          {LinkButton(ui, choice.key, padCells(labels[index] ?? '', labelWidth), choice.onPress, { autoFocus: choice.isCurrent === true })}
           {choice.detail && (
             <Box flexShrink={0}>
               <Text dimColor wrap="truncate-end">

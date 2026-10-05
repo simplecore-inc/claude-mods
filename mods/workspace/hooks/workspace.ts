@@ -109,8 +109,12 @@ export async function diffFiles(run: Run, root: string, from: string, to: string
   return parseDiffFiles(nameStatus, numstat)
 }
 
+/**
+ * One file's diff. The path is taken literally: a name holding `*`, `[` or a
+ * leading `:` is that file, never a pattern.
+ */
 export async function fileDiff(run: Run, root: string, from: string, to: string, path: string): Promise<string> {
-  return git(run, root, ['diff', '-M', from, to, '--', path])
+  return git(run, root, ['--literal-pathspecs', 'diff', '-M', from, to, '--', path])
 }
 
 /**
@@ -136,6 +140,37 @@ export async function restoreCheckpoint(
   }
 
   return made.length
+}
+
+/**
+ * Puts one file back as it was at a checkpoint: a file changed or deleted
+ * since is written back from it, a file made since is removed, and a rename
+ * is undone (the old path back, the new one removed). The caller takes a
+ * checkpoint first, so this can be undone.
+ * @returns the paths written back and the paths removed
+ */
+export async function restoreFile(
+  run: Run,
+  root: string,
+  commit: string,
+  file: DiffFile,
+  isWindows = false,
+): Promise<{ written: string[]; removed: string[] }> {
+  const written = file.status === 'added' ? [] : [file.from ?? file.path]
+  const removed = file.status === 'added' || file.status === 'renamed' ? [file.path] : []
+  // Paths are taken literally, so a name like `a[12].md` restores that file and no other.
+  if (written.length > 0) await git(run, root, ['--literal-pathspecs', 'restore', `--source=${commit}`, '--worktree', '--', ...written])
+  if (removed.length > 0) {
+    const { exitCode, stderr } = await run(removeArgv(removed, isWindows), { cwd: root })
+    if (exitCode !== 0) throw new GitError(`deleting ${removed.join(', ')} exited ${exitCode}: ${stderr.trim()}`)
+  }
+
+  return { written, removed }
+}
+
+/** The commit where `branch` parted from `mainBranch`: what a worktree's changes are counted from. */
+export async function mergeBase(run: Run, root: string, mainBranch: string, branch: string): Promise<string> {
+  return (await git(run, root, ['merge-base', mainBranch, branch])).trim()
 }
 
 /** The repository's worktrees: the main one first, each with its changes and its branch against the main branch. */

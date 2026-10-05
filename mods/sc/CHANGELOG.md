@@ -4,6 +4,33 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.4.0 (2026-10-05)
+
+### All plugins
+
+- Glyph buttons sit on a dark ground of their meaning (red to delete or stop, yellow to restore or pin, cyan to compare or open, green to finish), so they read at rest.
+- Every screen is drawn from the shared kit: text inputs, select fields, dialogs that ask for text, figures, bar charts, rankings and outlines look the same in both panes.
+
+### Accounts (`sc-accounts`)
+
+- The pane has tabs: Accounts, Usage and Storage.
+- An account shows what it spent past its plan, exactly as Claude's usage lookup reports it, when spending is on or something was spent.
+- Usage counts the tokens used on this machine from Claude Code's transcripts, subagents' included: input, output, cache read and write, cache reuse, sessions and responses, tokens by day, and the top models and projects, for the last 7 or 30 days or everything. Only what the transcripts gained is read after the first count.
+- Storage shows what `~/.claude` holds: transcripts, subagent transcripts and tool output by size, each project's sessions and last activity, the other folders, and Claude Code's own `cleanupPeriodDays`. Clean up deletes the sessions idle longer than an age picked, never the one running, after `delete` is typed in its dialog; their tokens stay counted.
+- `/sc:accounts usage` and `/sc:accounts storage` open those tabs.
+
+### Workspace (`sc-workspace`)
+
+- Memory: the memory files Claude Code reads here, global and project apart, each with what it is to Claude Code (instructions, rules, local, imported, auto memory). A file opens to read as Markdown, a page at a time; `▸` shows its outline, `↵` puts `@path` in the prompt, and a search finds every line holding the words, opening the file at that line.
+- Diff: `↺` puts one file back as it was at the base, after a dialog; the changes can be compared up to a later checkpoint instead of the working tree; **Draft commit message** puts a request for one in the prompt.
+- Diff: pressing another worktree's branch on the Agents tab shows its changes since it parted from the main branch, untracked files included.
+- Checkpoints: `±` opens what one turn changed; `✎` names a checkpoint and pins it, `☆` pins it, and a pinned checkpoint is kept past the newest 50. `/sc:workspace name <text>` names the newest.
+- Checkpoints are named by the first line written in their prompt, without the blocks Claude Code adds; their counts of what changed are kept, so they show at once in a new session.
+- Agents: each agent shows what it did last; a finished agent stays in a Finished group with its whole answer; an agent's row no longer shows `running` beside its answer.
+- Notes are numbered (`N3`); when Claude's answer writes `[done N3]`, the note offers a **Done** button.
+- A checkpoint another session of the project saved is kept when this one saves its own, and this session's start, the Diff tab's default base, is never deleted to make room.
+- A file's diff and its restore take its name literally: a name holding `*`, `[` or a leading `:` is that file and no other.
+
 ## 0.3.4 (2026-10-05)
 
 ### Workspace (`sc-workspace`)

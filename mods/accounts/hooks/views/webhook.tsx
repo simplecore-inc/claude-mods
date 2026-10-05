@@ -2,7 +2,7 @@ import type { ElementTable } from 'claude-code'
 
 import { WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS, WEBHOOK_VARIABLES } from '../webhook'
 import type { Messages } from '../i18n'
-import { CARD_CHROME, DialogFrame, IconButton, theme, Tiles, Toggle } from '../shared/kit'
+import { CARD_CHROME, DialogFrame, IconButton, InputFrame, theme, Tiles, Toggle, Toned } from '../shared/kit'
 import type { HeaderInfo } from '../shared/kit'
 import { displayWidth, packRows, truncate } from '../shared/layout'
 
@@ -69,19 +69,22 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
       <Box key="webhook-url" flexDirection="column" marginTop={1}>
         <Text dimColor>{m.webhookUrl}</Text>
         {Input ? (
-          <Box key="webhook-url-field" borderStyle="round" borderColor={theme.accent} paddingX={1}>
+          InputFrame(
+            ui,
+            'webhook-url-field',
+            true,
             <Input
               key="webhook-url-input"
               value={draft.url}
               placeholder={m.webhookUrlPlaceholder}
               onInput={value => actions.setUrl(value)}
               onSubmit={value => actions.setUrl(value)}
-            />
-          </Box>
+            />,
+          )
         ) : (
           <Text>{draft.url || m.webhookUrlPlaceholder}</Text>
         )}
-        {model.urlProblem && <Text color={theme.danger}>{model.urlProblem}</Text>}
+        {model.urlProblem && Toned(ui, 'webhook-url-problem', model.urlProblem, 'danger')}
       </Box>
       <Box key="webhook-token" flexDirection="column" marginTop={1}>
         <Box key="webhook-token-head" gap={2}>
@@ -91,17 +94,19 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
           </Text>
           {draft.hasToken && !draft.clearToken && IconButton(ui, 'webhook-token-clear', m.webhookTokenClear, theme.danger, actions.clearToken)}
         </Box>
-        {Input && (
-          <Box key="webhook-token-field" borderStyle="round" borderColor="gray" borderDimColor paddingX={1}>
+        {Input &&
+          InputFrame(
+            ui,
+            'webhook-token-field',
+            false,
             <Input
               key="webhook-token-input"
               value={draft.token}
               placeholder={m.webhookTokenPlaceholder}
               onInput={value => actions.setToken(value)}
               onSubmit={value => actions.setToken(value)}
-            />
-          </Box>
-        )}
+            />,
+          )}
         <Text dimColor wrap="wrap">
           {m.webhookTokenKept}
         </Text>
@@ -109,7 +114,7 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
       <Box key="webhook-template" flexDirection="column" marginTop={1}>
         <Text>
           <Text dimColor>{`${m.webhookTemplateFile} `}</Text>
-          <Text color={theme.accent}>{model.templatePath}</Text>
+          {Toned(ui, 'webhook-template-path', model.templatePath, 'accent')}
         </Text>
         <Text dimColor wrap="wrap">
           {m.webhookTemplateHint}
@@ -128,9 +133,7 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
       <Box key="webhook-preview" flexDirection="column" marginTop={1}>
         <Text dimColor>{m.webhookPreview}</Text>
         {'problem' in model.preview ? (
-          <Text color={theme.danger} wrap="wrap">
-            {model.preview.problem}
-          </Text>
+          Toned(ui, 'webhook-preview-problem', model.preview.problem, 'danger', { wrap: 'wrap' })
         ) : (
           <Box key="webhook-preview-lines" flexDirection="column">
             {shownLines.map((line, index) => (
@@ -142,9 +145,7 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
           </Box>
         )}
       </Box>
-      <Text key="webhook-last" color={model.lastSend ? (model.lastSend.ok ? theme.ok : theme.danger) : undefined} dimColor={!model.lastSend}>
-        {model.lastSend?.text ?? m.webhookNeverSent}
-      </Text>
+      {Toned(ui, 'webhook-last', model.lastSend?.text ?? m.webhookNeverSent, model.lastSend ? (model.lastSend.ok ? 'ok' : 'danger') : undefined, { isDim: !model.lastSend })}
     </Box>
   )
 

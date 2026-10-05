@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { projectFolder, StatusCollector, transcriptPath } from '../hooks/collector'
+import { StatusCollector } from '../hooks/collector'
+import { projectFolder, transcriptPath } from '../hooks/shared/claude'
 import type { CollectorIo } from '../hooks/collector'
 import { displayModel, editedPath, inProgressTask, lineChanges, parsePr, settledEffort, todoFilesOf, ultracodeAfter } from '../hooks/status'
 

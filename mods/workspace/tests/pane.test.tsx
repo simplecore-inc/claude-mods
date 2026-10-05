@@ -46,6 +46,15 @@ function seedState(on: On, extra: Record<string, unknown>): void {
     clock: 0,
     dialog: null,
     focused: null,
+    activity: {},
+    answers: {},
+    finished: [],
+    expandedAgent: null,
+    memory: null,
+    memoryQuery: '',
+    memoryScope: 'all',
+    memoryOpen: null,
+    memoryPage: 0,
     ...extra,
   }
   // A hook standing for the engine answers { value: <the event's result> }.
@@ -164,7 +173,7 @@ test('the notes tab: an input where the surface has one, open notes first', asyn
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
     expect(await ui.find({ key: 'note-new' })).toBeDefined()
-    expect((await ui.find({ key: 'notes-input' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan' })
+    expect((await ui.find({ key: 'notes-input-frame' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan', flexGrow: 1 })
     expect((await ui.find({ key: 'toggle-n1' }))?.text).toBe('☐')
     expect((await ui.find({ key: 'toggle-n2' }))?.text).toBe('☑')
     // Open and done notes are two groups; a done note is struck through, its group saying it is not sent.
@@ -207,11 +216,9 @@ test('the diff tab: files with their marks, and the open file\'s diff', async ($
     expect(await ui.find({ type: 'Text', text: '+28' })).toBeDefined()
     // Every file's counts take the same width, so the bars line up.
     const widths = async (pattern: RegExp) => new Set((await ui.findAll({ type: 'Text', text: pattern })).map(found => (found.text ?? '').length))
-    const added = [...(await widths(/^ {2}\s*\+\d+$/))]
-    const removed = [...(await widths(/^ \s*−\d+$/))]
-    expect(added.length).toBe(1)
-    expect(removed.length).toBe(1)
-    expect([...(await widths(/^ {2}binary\s*$/))]).toEqual([(added[0] ?? 0) + (removed[0] ?? 0)])
+    const counts = [...(await widths(/^ {2}\s*\+\d+ \s*−\d+$/))]
+    expect(counts.length).toBe(1)
+    expect([...(await widths(/^ {2}binary\s*$/))]).toEqual(counts)
     await ui.unmount()
   }
 })
@@ -262,7 +269,7 @@ test('on a narrow pane a checkpoint keeps one line: the label is cut to its cell
     ],
   })
   const ui = await mountPane($, 'terminal', 50)
-  const shown = (await ui.find({ type: 'Text', text: /^에이전트/ }))?.text ?? ''
+  const shown = (await ui.find({ type: 'Text', text: /^에이/ }))?.text ?? ''
   expect(shown.endsWith('…')).toBe(true)
   expect(shown.length).toBeLessThan(label.length)
   expect((await ui.find({ key: 'checkpoint-right-refs/sc/checkpoints/s/0002' }))?.props).toMatchObject({ flexShrink: 0 })
@@ -582,5 +589,231 @@ test('a long diff of ordinary lines draws, cut to what the engine takes', async 
   })
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Code' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the open file has a restore button that asks first; comparing two checkpoints has none', async ($, on) => {
+  seedState(on, { tab: 'diff' })
+  const written: unknown[] = []
+  on('state.set', ($, e) => {
+    if (e.key === 'dialog') written.push(e.value)
+    return { value: { isSet: true, version: 2 } as never }
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'diff-target' })).toBeDefined()
+  expect((await ui.find({ key: 'diff-target' }))?.text).toBe('Working tree ▾')
+  await ui.press({ key: 'diff-file-restore' })
+  expect(written).toContainEqual({ kind: 'file', ref: 'src/app.ts' })
+  await ui.unmount()
+})
+
+test('between two checkpoints the open file has no restore button', async ($, on) => {
+  seedState(on, {
+    tab: 'diff',
+    diff: {
+      base: { commit: 'c1', label: 'Session start', at: NOW - 3_600_000, isSessionStart: true },
+      target: { commit: 'c2', label: 'Fix the login bug', at: NOW - 60_000, isSessionStart: false },
+      files: [{ path: 'src/app.ts', status: 'modified', added: 8, removed: 2 }],
+      selected: { path: 'src/app.ts', text: '@@ -1 +1 @@\n-old\n+new', omitted: 0 },
+      at: NOW,
+    },
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'diff-file-restore' })).toBeUndefined()
+  expect((await ui.find({ key: 'diff-target' }))?.text).toMatch(/Fix the login bug ▾$/)
+  await ui.unmount()
+})
+
+test('the file dialog names the file, what restoring undoes, and how to undo it', async ($, on) => {
+  seedState(on, { tab: 'diff', dialog: { kind: 'file', ref: 'src/app.ts' } })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /^Put src\/app\.ts back as it was at / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Undoes +8 −2 in this file.' })).toBeDefined()
+  expect((await ui.find({ key: 'dialog-confirm' }))?.text).toBe('Restore file')
+  await ui.unmount()
+})
+
+test('the target dialog offers the working tree and the checkpoints after the base', async ($, on) => {
+  seedState(on, { tab: 'diff', dialog: { kind: 'target', ref: '' } })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'Compare the changes up to' })).toBeDefined()
+  expect((await ui.find({ key: 'target-now' }))?.props).toMatchObject({ autoFocus: true })
+  expect(await ui.find({ key: 'target-c2' })).toBeDefined()
+  expect(await ui.find({ key: 'target-c1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Draft commit message puts a request naming every changed file in the prompt', async ($, on) => {
+  seedState(on, { tab: 'diff' })
+  const filled: { text: string; mode: string }[] = []
+  on('prompt.fill', ($, e) => {
+    filled.push({ text: e.text, mode: e.mode })
+    return { isFilled: true } as never
+  })
+  on('ui.toast', () => ({ value: undefined as never }))
+  const ui = await mountPane($, 'terminal')
+  await ui.press({ key: 'draft-commit' })
+  expect(filled).toHaveLength(1)
+  expect(filled[0]?.mode).toBe('replace')
+  expect(filled[0]?.text).toContain('- A docs/new.md (+20 −0)')
+  await ui.unmount()
+})
+
+test('an agent shows what it did last under its row', async ($, on) => {
+  seedState(on, { activity: { a1: { text: 'Bash: npm test', isAnswer: false, at: NOW - 120_000 } } })
+  const ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'activity-a1' }))?.text).toBe('↳ 2m ago · Bash: npm test')
+  await ui.unmount()
+})
+
+test('a checkpoint whose prompt was only a harness block is named by its kind', async ($, on) => {
+  seedState(on, {
+    tab: 'checkpoints',
+    checkpoints: [{ ref: 'refs/sc/checkpoints/s/0003', commit: 'c3', tree: 't3', at: NOW - 1000, label: '<task-notification>', kind: 'turn', since: { files: 0, added: 0, removed: 0 } }],
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: '<task-notification>' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Prompt' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a finished agent stays in its group with its answer, shown whole when opened', async ($, on) => {
+  const done = { id: 'a9', stopId: 'a9', label: 'Summarise files', type: 'Explore', status: 'completed', firstSeen: NOW - 120_000, endedAt: NOW - 30_000, answer: 'Read 7 files.\nAll fine.' }
+  seedState(on, { finished: [done], activity: { a9: { text: 'Read 7 files.', isAnswer: true, at: NOW - 30_000 } } })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'Finished' })).toBeDefined()
+  expect((await ui.find({ key: 'answer-a9' }))?.text).toBe('▸')
+  expect(await ui.find({ key: 'finished-activity-a9' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a finished agent opened shows its answer whole', async ($, on) => {
+  const done = { id: 'a9', stopId: 'a9', label: 'Summarise files', type: 'Explore', status: 'completed', firstSeen: NOW - 120_000, endedAt: NOW - 30_000, answer: 'Read 7 files.\nAll fine.' }
+  seedState(on, { finished: [done], expandedAgent: 'a9' })
+  const ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'answer-a9' }))?.text).toBe('▾')
+  expect((await ui.find({ type: 'Text', text: /All fine\.$/ }))?.text).toBe('Read 7 files.\nAll fine.')
+  await ui.unmount()
+})
+
+test('another worktree\'s branch is a button; the main one is not', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'worktree-open-/repo-busy' })).toBeDefined()
+  expect(await ui.find({ key: 'worktree-open-/repo' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('another worktree\'s changes are headed by its branch, with no base to pick and nothing to restore', async ($, on) => {
+  seedState(on, {
+    tab: 'diff',
+    diff: {
+      base: { commit: 'mb', label: 'main', at: 0, isSessionStart: false },
+      worktree: { path: '/repo-busy', branch: 'wip' },
+      files: [{ path: 'src/app.ts', status: 'modified', added: 1, removed: 0 }],
+      selected: { path: 'src/app.ts', text: '@@ -1 +1 @@\n-a\n+b', omitted: 0 },
+      at: NOW,
+    },
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'Changes in wip' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /since it parted from main/ })).toBeDefined()
+  expect(await ui.find({ key: 'diff-base' })).toBeUndefined()
+  expect(await ui.find({ key: 'diff-file-restore' })).toBeUndefined()
+  expect(await ui.find({ key: 'diff-worktree-close' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('each checkpoint but the newest opens its turn; a pinned one has its star lit', async ($, on) => {
+  seedState(on, {
+    tab: 'checkpoints',
+    checkpoints: [
+      { ref: 'r2', commit: 'c2', tree: 't2', at: NOW - 60_000, label: 'Fix the login bug', kind: 'turn', since: { files: 1, added: 1, removed: 0 } },
+      { ref: 'r1', commit: 'c1', tree: 't1', at: NOW - 3_600_000, label: '', kind: 'session', name: 'Before the refactor', isPinned: true, since: { files: 2, added: 3, removed: 1 } },
+    ],
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'turn-r2' })).toBeUndefined()
+  expect(await ui.find({ key: 'turn-r1' })).toBeDefined()
+  expect((await ui.find({ key: 'pin-r1' }))?.text).toBe('★')
+  // A pinned star sits on the warning ground, an unpinned one on the neutral fill.
+  expect((await ui.find({ key: 'pin-r1-ground' }))?.props.backgroundColor).toBe('#6b5719')
+  expect((await ui.find({ key: 'pin-r2-ground' }))?.props.backgroundColor).toBe('#2a2f38')
+  expect((await ui.find({ key: 'pin-r2' }))?.text).toBe('☆')
+  expect(await ui.find({ type: 'Text', text: 'Before the refactor' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the name dialog asks for a name in a field, or says how to give one where there is none', async ($, on) => {
+  seedState(on, { tab: 'checkpoints', dialog: { kind: 'name', ref: 'refs/sc/checkpoints/s/0002' } })
+  let ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /^Name the checkpoint at / })).toBeDefined()
+  expect(await ui.find({ key: 'checkpoint-name' })).toBeDefined()
+  await ui.unmount()
+  ui = await mountPane($, 'mobile')
+  expect(await ui.find({ key: 'checkpoint-name' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /\/sc:workspace name/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a note Claude says it finished shows its number and a Done button to confirm', async ($, on) => {
+  seedState(on, {
+    tab: 'notes',
+    notes: [{ id: 'n1', text: 'Ask about the retry policy', isDone: false, at: NOW, seq: 3, isSuggestedDone: true }],
+  })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'N3' })).toBeDefined()
+  expect((await ui.find({ key: 'confirm-done-n1' }))?.text).toBe('Done')
+  expect(await ui.find({ key: 'suggested-n1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('every glyph button reads at rest: full strength, on a ground of its meaning', async ($, on) => {
+  seedState(on, { tab: 'checkpoints' })
+  const ui = await mountPane($, 'terminal')
+  const restore = await ui.find({ key: 'restore-refs/sc/checkpoints/s/0002' })
+  expect(restore?.props.dimColor).toBeUndefined()
+  expect((await ui.find({ key: 'restore-refs/sc/checkpoints/s/0002-ground' }))?.props.backgroundColor).toBe('#6b5719')
+  expect((await ui.find({ key: 'compare-refs/sc/checkpoints/s/0002-ground' }))?.props.backgroundColor).toBe('#1d5566')
+  await ui.unmount()
+})
+
+const MEMORY_FILES = [
+  { path: '/home/me/.claude/CLAUDE.md', display: '~/.claude/CLAUDE.md', scope: 'global', kind: 'user', bytes: 900, lines: 40, outline: [{ line: 1, text: 'Global instructions', level: 1 }, { line: 9, text: 'Git', level: 2 }] },
+  { path: '/repo/CLAUDE.md', display: 'CLAUDE.md', scope: 'project', kind: 'project', bytes: 300, lines: 12, outline: [] },
+  { path: '/repo/docs/rules.md', display: 'docs/rules.md', scope: 'project', kind: 'imported', bytes: 100, lines: 5, outline: [], note: 'CLAUDE.md' },
+  { path: '/home/me/.claude/projects/-repo/memory/x.md', display: '~/.claude/projects/-repo/memory/x.md', scope: 'project', kind: 'auto', bytes: 80, lines: 6, outline: [], note: 'every release updates the pictures' },
+]
+
+test('the Memory tab lists the global and the project files apart, each with what it is to Claude Code', async ($, on) => {
+  seedState(on, { tab: 'memory', memory: MEMORY_FILES })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ key: 'tab-memory' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Global' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Project' })).toBeDefined()
+  expect((await ui.find({ key: 'memory-open-/home/me/.claude/CLAUDE.md' }))?.text).toBe('~/.claude/CLAUDE.md')
+  expect((await ui.find({ key: 'memory-outline-toggle-/home/me/.claude/CLAUDE.md' }))?.text).toBe('▸')
+  expect(await ui.find({ type: 'Text', text: 'your instructions · 40 lines' })).toBeDefined()
+  expect((await ui.find({ key: 'memory-note-/repo/docs/rules.md' }))?.text).toBe('↳ from CLAUDE.md')
+  expect((await ui.find({ key: 'memory-note-/home/me/.claude/projects/-repo/memory/x.md' }))?.text).toBe('↳ every release updates the pictures')
+  expect(await ui.find({ key: 'memory-search-input' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an open memory file shows its outline with line numbers; a scope shows only its files', async ($, on) => {
+  seedState(on, { tab: 'memory', memory: MEMORY_FILES, memoryOpen: '/home/me/.claude/CLAUDE.md', memoryScope: 'global' })
+  const ui = await mountPane($, 'terminal')
+  expect((await ui.find({ key: 'memory-outline-toggle-/home/me/.claude/CLAUDE.md' }))?.text).toBe('▾')
+  expect((await ui.find({ key: 'memory-outline-/home/me/.claude/CLAUDE.md' }))?.text).toContain('9    Git')
+  expect(await ui.find({ key: 'memory-open-/repo/CLAUDE.md' })).toBeUndefined()
+  expect((await ui.find({ key: 'memory-scope-field' }))?.text).toBe('Global ▾')
+  await ui.unmount()
+})
+
+test('on mobile, with no field, the Memory tab still lists the files', async ($, on) => {
+  seedState(on, { tab: 'memory', memory: MEMORY_FILES })
+  const ui = await mountPane($, 'mobile')
+  expect(await ui.find({ key: 'memory-search-input' })).toBeUndefined()
+  expect(await ui.find({ key: 'memory-open-/repo/CLAUDE.md' })).toBeDefined()
   await ui.unmount()
 })

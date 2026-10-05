@@ -1,4 +1,4 @@
-import type { DiffFile, WorktreeRow } from '../types'
+import type { AgentRow, CheckpointRow, DiffFile, FinishedAgent, WorktreeRow } from '../types'
 
 /** One worktree as `git worktree list --porcelain` describes it. */
 export type WorktreeEntry = { path: string; head: string; branch?: string; isBare: boolean; isDetached: boolean; isLocked: boolean }
@@ -80,9 +80,34 @@ export function renamedTo(path: string): string {
   return plain ? path.slice(plain.index + 4) : path
 }
 
-/** The first line of a prompt, cut to `width` characters, for a checkpoint's label. */
+/** Blocks the harness wraps around text it sends as a prompt; none of it is what the person wrote. */
+const HARNESS_BLOCK = /<(task-notification|system-reminder|local-command-[\w-]+|command-[\w-]+)\b[^>]*>[\s\S]*?<\/\1>/g
+/** Text pasted into the prompt, wrapped by the harness. */
+const PASTED_BLOCK = /<pasted_content\b[^>]*>([\s\S]*?)<\/pasted_content>/g
+
+/** The first non-empty line of `text` with any tag left in it removed. */
+function firstLine(text: string): string {
+  for (const line of text.replace(/<\/?[A-Za-z][\w-]*\b[^>]*>/g, ' ').split('\n')) {
+    const clean = line.replace(/\s+/g, ' ').trim()
+    if (clean !== '') return clean
+  }
+
+  return ''
+}
+
+/**
+ * A checkpoint's label from the prompt it was taken before: the first line
+ * the person wrote, cut to `width` characters. Harness blocks are left out;
+ * pasted text stands in when nothing else was written, and a task
+ * notification's summary when the prompt was only that. Empty when nothing
+ * readable is left, so the caller names the checkpoint by its kind.
+ */
 export function promptLabel(text: string, width = 60): string {
-  const line = text.trim().split('\n')[0]?.trim() ?? ''
+  const pasted = [...text.matchAll(PASTED_BLOCK)].map(match => match[1] ?? '').join('\n')
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(text)?.[1] ?? ''
+  const own = text.replace(HARNESS_BLOCK, '\n').replace(PASTED_BLOCK, '\n')
+  // A label stored cut short keeps an opening tag whose block never closes: it reads as nothing.
+  const line = firstLine(own) || firstLine(pasted) || firstLine(summary)
   if (line.length <= width) return line
 
   return `${line.slice(0, width - 1)}…`
@@ -128,4 +153,53 @@ export function clipDiff(text: string, limit: number): { text: string; omitted: 
   }
 
   return { text: kept.join('\n'), omitted: lines.length - kept.length }
+}
+
+/**
+ * Which checkpoints stay when one more is taken: every pinned one, every one
+ * of `keep` (refs), and the newest `limit` of the rest; the others are
+ * `gone`, their refs to delete.
+ */
+export function keptCheckpoints(all: CheckpointRow[], limit: number, keep: readonly string[] = []): { kept: CheckpointRow[]; gone: CheckpointRow[] } {
+  const over = new Set(
+    all
+      .filter(one => !one.isPinned && !keep.includes(one.ref))
+      .slice(limit)
+      .map(one => one.ref),
+  )
+
+  return { kept: all.filter(one => !over.has(one.ref)), gone: all.filter(one => over.has(one.ref)) }
+}
+
+/**
+ * The finished group after the engine's list is read again: the agents it
+ * listed before and lists no more go first, with their answers, newest first;
+ * an agent listed again leaves the group; at most `limit` are kept.
+ */
+export function finishAgents(
+  before: AgentRow[],
+  listed: AgentRow[],
+  finished: FinishedAgent[],
+  answers: Record<string, string>,
+  now: number,
+  limit: number,
+): FinishedAgent[] {
+  const ids = new Set(listed.map(row => row.id))
+  const ended = before
+    .filter(row => !ids.has(row.id))
+    .map(row => ({ ...row, endedAt: now, ...(answers[row.id] !== undefined ? { answer: answers[row.id] } : {}) }))
+
+  return [...ended, ...finished.filter(one => !ids.has(one.id) && !ended.some(row => row.id === one.id))].slice(0, limit)
+}
+
+/**
+ * This session's checkpoints merged with the stored ones, by ref, newest
+ * first: a row only the store has (another session's) is kept, and for a row
+ * both have, this session's (with its counts, name and pin) wins.
+ */
+export function mergeCheckpoints(own: CheckpointRow[], stored: CheckpointRow[]): CheckpointRow[] {
+  const byRef = new Map(stored.map(row => [row.ref, row]))
+  for (const row of own) byRef.set(row.ref, row)
+
+  return [...byRef.values()].sort((a, b) => b.at - a.at)
 }

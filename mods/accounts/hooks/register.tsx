@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AccountView, BandTarget, StatusInfo, UsageView } from '../types'
+import type { AccountsTabKey, AccountView, BandTarget, StatusInfo, UsageView } from '../types'
 import {
   AnthropicError,
   PROFILE_URL,
@@ -13,13 +13,21 @@ import {
   withMeasured,
   needsRefresh,
   parseProfile,
+  parseSpend,
   parseUsage,
   refreshInit,
   usageInit,
 } from './anthropic'
 import { describeLimits, pick, releaseDateOf } from './format'
 import { messagesFor, resolveLocale } from './i18n'
-import { Dialog, Header, Tiles } from './shared/kit'
+import { ChoiceDialog, Dialog, Header, InputDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { addRecords, asIndex, emptyIndex, localDay, parseScan, projectOf, scannedBytes, SCAN_SCRIPT, sessionOf, indexToStore, summarize } from './usage'
+import type { UsageIndex } from './usage'
+import { UsageTab } from './views/usage'
+import { StorageTab } from './views/storage'
+import { byteSize, cleanupPlan, cleanupTargets, sessionsOf, summarizeStorage } from './storage'
+import type { StorageFile } from './storage'
+import { removeTreeArgv } from './shared/files'
 import { StatusCollector } from './collector'
 import { changeKey, webhookRequest, webhookValues, DEFAULT_TEMPLATE_TEXT, parseConfig, renderTemplate, urlProblem, WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS } from './webhook'
 import type { WebhookConfig } from './webhook'
@@ -59,6 +67,34 @@ const tick = atom({ plugin: 'sc-accounts', key: 'tick' } as const, 0)
 const webhookDraft = atom({ plugin: 'sc-accounts', key: 'webhookDraft' } as const, null)
 const webhookLast = atom({ plugin: 'sc-accounts', key: 'webhookLast' } as const, null)
 const paneOpen = atom({ plugin: 'sc-accounts', key: 'paneOpen' } as const, false)
+const tab = atom({ plugin: 'sc-accounts', key: 'tab' } as const, 'accounts')
+const usagePeriod = atom({ plugin: 'sc-accounts', key: 'usagePeriod' } as const, 30)
+const usageSummary = atom({ plugin: 'sc-accounts', key: 'usageSummary' } as const, null)
+const usageScan = atom({ plugin: 'sc-accounts', key: 'usageScan' } as const, null)
+const usageError = atom({ plugin: 'sc-accounts', key: 'usageError' } as const, null)
+const storage = atom({ plugin: 'sc-accounts', key: 'storage' } as const, null)
+const cleanupDays = atom({ plugin: 'sc-accounts', key: 'cleanupDays' } as const, 30)
+/** The idle ages a cleanup offers, in days. */
+const CLEANUP_DAYS = [7, 14, 30, 90]
+/** Claude Code's own default for `cleanupPeriodDays`. */
+const AUTO_CLEANUP_DEFAULT_DAYS = 30
+/** How deep the Storage tab walks the projects folder: tool output sits in `<project>/<session>/tool-results/`. */
+const STORAGE_DEPTH = 6
+/** Project folders the Storage tab names: as many as it lists. */
+const STORAGE_PROJECTS_NAMED = 8
+/** Other folders the Storage tab lists, the largest first, and the smallest it lists. */
+const STORAGE_FOLDERS_SHOWN = 8
+const STORAGE_FOLDER_MIN_BYTES = 1024 * 1024
+/** Paths one deletion command takes at a time. */
+const DELETE_BATCH = 40
+/** The periods the Usage tab offers, in days; 0 is everything counted. */
+const USAGE_PERIODS = [7, 30, 0]
+/** Bytes of transcripts one count reads before it lets the pane draw and goes on. */
+const USAGE_SCAN_BYTES = 256 * 1024 * 1024
+/** Rows the Accounts tab takes besides its cards: the header, the tab bar and its rule, the margins and the footer. */
+const ACCOUNTS_CHROME_ROWS = 9
+/** Rows the pane takes on its Usage tab. */
+const USAGE_ROWS = 44
 /** Whether the workspace's pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
 const workspacePaneOpen = { plugin: 'sc-workspace', key: 'paneOpen' } as const
 
@@ -771,7 +807,10 @@ async function readingFor($: EngineInterface, uuid: string, liveUuid: string | n
     throw new AnthropicError(`usage endpoint answered ${response.status}`, response.status, response.headers['retry-after'])
   }
 
-  return { limits: parseUsage(JSON.parse(response.text)), fetchedAt: await $.clock.now(), source: 'lookup' }
+  const body: unknown = JSON.parse(response.text)
+  const spend = parseSpend(body)
+
+  return { limits: parseUsage(body), fetchedAt: await $.clock.now(), source: 'lookup', ...(spend ? { spend } : {}) }
 }
 
 /** Reads the live account alone and shares the reading; what a switch and Claude Code's own readings ask for. */
@@ -853,13 +892,327 @@ async function refresh($: EngineInterface, isAsked: boolean): Promise<void> {
   }
 }
 
+// ── usage ──────────────────────────────────────────────────────────────────
+
+/** The count of this machine's transcripts so far, read from its file once and kept. */
+let usageIndex: UsageIndex | null = null
+/** Every message id counted, as a set, read from the count's file once. */
+let usageSeen: Set<string> | null = null
+/** Whether a count is running: a second one asked meanwhile is dropped. */
+let isCounting = false
+
+async function usageIndexPath($: EngineInterface): Promise<string> {
+  return `${await claudeDirectory($)}/sc-accounts/usage-index.json`
+}
+
+/** The file holding the `n`th part of the counted message ids. */
+async function usageIdsPath($: EngineInterface, n: number): Promise<string> {
+  return `${await claudeDirectory($)}/sc-accounts/usage-ids-${n}.json`
+}
+
+/** Writes the count: its ids in files of their own, then the index naming how many. */
+async function saveUsageIndex($: EngineInterface, index: UsageIndex, ids: Iterable<string>): Promise<void> {
+  const stored = indexToStore(index, [...ids])
+  for (const [n, part] of stored.idFiles.entries()) await $.fs.write(await usageIdsPath($, n), JSON.stringify(part))
+  await $.fs.write(await usageIndexPath($), JSON.stringify(stored.index))
+}
+
+async function loadUsageIndex($: EngineInterface): Promise<UsageIndex> {
+  if (usageIndex) return usageIndex
+  const path = await usageIndexPath($)
+  try {
+    if (!(await $.fs.exists(path))) usageIndex = emptyIndex()
+    else {
+      const raw = JSON.parse(await $.fs.read(path)) as { idFiles?: unknown }
+      const index = asIndex(raw)
+      // The ids live in files of their own; an index written before that holds them itself.
+      const ids = [...index.ids]
+      const parts = typeof raw.idFiles === 'number' ? raw.idFiles : 0
+      for (let n = 0; n < parts; n += 1) ids.push(...(JSON.parse(await $.fs.read(await usageIdsPath($, n))) as string[]))
+      usageIndex = { ...index, ids }
+    }
+  } catch (error) {
+    // A file that does not parse is counted again from the start.
+    debugLog($, error)
+    usageIndex = emptyIndex()
+  }
+
+  return usageIndex
+}
+
+/** How deep transcripts sit under the projects folder: `<project>/<session>/subagents/<agent>.jsonl`. */
+const TRANSCRIPT_DEPTH = 4
+
+/**
+ * Every transcript under the config directory with its size: each session's,
+ * and each subagent's, which counts toward the session that started it.
+ */
+async function transcriptFiles($: EngineInterface): Promise<{ path: string; session: string; size: number }[]> {
+  const root = `${await claudeDirectory($)}/projects`
+  if (!(await $.fs.exists(root))) return []
+  const files: { path: string; session: string; size: number }[] = []
+  const walk = async (relative: string, depth: number): Promise<void> => {
+    for (const entry of await $.fs.list(`${root}/${relative}`)) {
+      const child = relative === '' ? entry.name : `${relative}/${entry.name}`
+      if (entry.kind === 'dir' && depth < TRANSCRIPT_DEPTH) await walk(child, depth + 1)
+      else if (entry.kind === 'file' && entry.name.endsWith('.jsonl') && depth >= 2) {
+        files.push({ path: `${root}/${child}`, session: sessionOf(child), size: entry.size })
+      }
+    }
+  }
+  await walk('', 1)
+
+  return files
+}
+
+/** The Usage tab's figures for its period, from the count so far. */
+async function refreshUsageSummary($: EngineInterface): Promise<void> {
+  const index = await loadUsageIndex($)
+  const period = await read($, usagePeriod)
+  const today = localDay(new Date(await $.clock.now()).toISOString())
+  await update($, usageSummary, () => summarize(index, period === 0 ? null : period, today))
+}
+
+/**
+ * Counts what the transcripts gained since the last count, up to
+ * `USAGE_SCAN_BYTES` at a time, saying how far it has got; while the Usage tab
+ * is on screen it goes on until every transcript is counted. With
+ * `isToTheEnd` it counts everything in this call (before a cleanup deletes
+ * transcripts, so their tokens are counted first).
+ */
+async function countUsage($: EngineInterface, isToTheEnd = false): Promise<string[]> {
+  if (isCounting && !isToTheEnd) return []
+  // A count to the end waits for one already running, then reads what it left.
+  while (isCounting) await new Promise<void>(resolve => $.clock.after(200, resolve))
+  isCounting = true
+  try {
+    await update($, usageError, () => null)
+    let index = await loadUsageIndex($)
+    const seen = usageSeen ?? new Set(index.ids)
+    usageSeen = seen
+    const all = await transcriptFiles($)
+    const pending = all.filter(file => (index.files[file.path]?.offset ?? 0) < file.size)
+    if (pending.length === 0) {
+      await update($, usageScan, () => null)
+      await refreshUsageSummary($)
+
+      return []
+    }
+    // The progress is of every transcript: those counted before, in an earlier session too, are done.
+    const total = all.length
+    await update($, usageScan, () => ({ done: total - pending.length, total }))
+    let budget = isToTheEnd ? Number.POSITIVE_INFINITY : USAGE_SCAN_BYTES
+    let done = 0
+    let hasMoved = false
+    const failed: string[] = []
+    for (const file of pending) {
+      if (budget <= 0) break
+      // A transcript is read a chunk at a time, so one of gigabytes never meets the time limit whole.
+      let offset = index.files[file.path]?.offset ?? 0
+      let isFailed = false
+      while (offset < file.size && budget > 0) {
+        const to = Math.min(file.size, offset + USAGE_SCAN_BYTES, offset + budget)
+        const { exitCode, stdout, stderr } = await $.process.run(['sh', '-c', SCAN_SCRIPT, 'sh', file.path, String(to), String(offset + 1), String(to - offset)], {
+          timeoutMs: 120_000,
+        })
+        if (exitCode === -1 && /failed to start|ENOENT/.test(stderr)) {
+          await update($, usageError, () => m.usageNeedsShell)
+
+          return [file.path]
+        }
+        if (exitCode !== 0) {
+          debugLog($, new Error(`usage count of ${file.path} exited ${exitCode}: ${stderr.trim()}`))
+          isFailed = true
+          break
+        }
+        const next = offset + scannedBytes(stdout)
+        index = addRecords(index, seen, file.path, file.session, parseScan(stdout), next)
+        budget -= to - offset
+        // Only a line still being written is left: the file is done for this pass.
+        if (next === offset) break
+        hasMoved = true
+        offset = next
+      }
+      if (isFailed) failed.push(file.path)
+      // A failed file counts as done for this pass, so the count never retries it without end.
+      if (isFailed || budget > 0 || offset >= file.size) done += 1
+    }
+    usageIndex = index
+    await saveUsageIndex($, index, seen)
+    await refreshUsageSummary($)
+    const left = pending.length - done
+    const isShown = (await isPaneShown($)) && (await read($, tab)) === 'usage'
+    if (left > 0 && hasMoved && isShown) {
+      await update($, usageScan, () => ({ done: total - left, total }))
+      $.clock.after(100, () => void countUsage($).catch((error: unknown) => debugLog($, error)))
+    } else {
+      await update($, usageScan, () => null)
+    }
+
+    return failed
+  } finally {
+    isCounting = false
+  }
+}
+
+// ── storage ────────────────────────────────────────────────────────────────
+
+/** The files under the projects folder as last measured, for the cleanup to choose from. */
+let storageFiles: StorageFile[] = []
+
+/** Every file under the projects folder, with its size and when it last changed. */
+async function projectFiles($: EngineInterface, root: string): Promise<StorageFile[]> {
+  if (!(await $.fs.exists(root))) return []
+  const files: StorageFile[] = []
+  const walk = async (relative: string, depth: number): Promise<void> => {
+    for (const entry of await $.fs.list(relative === '' ? root : `${root}/${relative}`)) {
+      const child = relative === '' ? entry.name : `${relative}/${entry.name}`
+      if (entry.kind === 'dir' && !entry.isLink && depth < STORAGE_DEPTH) await walk(child, depth + 1)
+      else if (entry.kind === 'file') files.push({ relative: child, size: entry.size, mtimeMs: entry.mtimeMs })
+    }
+  }
+  await walk('', 1)
+
+  return files
+}
+
+/** The sizes of the config directory's other folders, by `du`; none where there is no POSIX shell. */
+async function otherFolders($: EngineInterface, directory: string): Promise<{ name: string; bytes: number }[]> {
+  const names = (await $.fs.list(directory)).filter(entry => entry.kind === 'dir' && entry.name !== 'projects').map(entry => entry.name)
+  if (names.length === 0) return []
+  const { exitCode, stdout } = await $.process.run(['du', '-sk', '--', ...names.map(name => `${directory}/${name}`)], { timeoutMs: 60_000 })
+  if (exitCode !== 0 && stdout.trim() === '') return []
+
+  return stdout
+    .split('\n')
+    .map(line => line.split('\t'))
+    .filter(parts => parts.length === 2 && /^\d+$/.test(parts[0] ?? ''))
+    .map(([kb = '0', path = '']) => ({ name: path.slice(directory.length + 1), bytes: Number(kb) * 1024 }))
+    .filter(folder => folder.bytes >= STORAGE_FOLDER_MIN_BYTES)
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, STORAGE_FOLDERS_SHOWN)
+}
+
+/** The project a folder's newest session transcript worked in, read from its first `cwd`; undefined when none is found. */
+async function recordedProject($: EngineInterface, root: string, folder: string, files: StorageFile[]): Promise<string | undefined> {
+  const newest = files
+    // A session's own transcript: a subagent's may have worked in a worktree of its own.
+    .filter(file => file.relative.startsWith(`${folder}/`) && file.relative.endsWith('.jsonl') && file.relative.split('/').length === 2)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+  if (!newest) return undefined
+  const { exitCode, stdout } = await $.process.run(['sh', '-c', 'head -c 262144 "$1" | grep -a -o -m 1 \'"cwd":"[^"]*"\'', 'sh', `${root}/${newest.relative}`], {
+    timeoutMs: 10_000,
+  })
+  const cwd = exitCode === 0 ? /"cwd":"([^"]*)"/.exec(stdout)?.[1] : undefined
+
+  return cwd ? projectOf(cwd.replace(/\\\\/g, '\\')) : undefined
+}
+
+/** Measures what the config directory holds, for the Storage tab. */
+async function measureStorage($: EngineInterface): Promise<void> {
+  const directory = await claudeDirectory($)
+  const files = await projectFiles($, `${directory}/projects`)
+  storageFiles = files
+  const summary = summarizeStorage(files)
+  // A folder is named after the project its sessions worked in, as the usage count recorded it.
+  const index = await loadUsageIndex($)
+  const votes = new Map<string, Map<string, number>>()
+  for (const session of sessionsOf(files)) {
+    const project = index.sessions[session.session]?.projects[0]
+    if (!project) continue
+    const tally = votes.get(session.folder) ?? new Map<string, number>()
+    tally.set(project, (tally.get(project) ?? 0) + 1)
+    votes.set(session.folder, tally)
+  }
+  const voted = (folder: string) => [...(votes.get(folder)?.entries() ?? [])].sort((a, b) => b[1] - a[1])[0]?.[0]
+  // A folder the count knows nothing of is named from the directory its newest transcript records.
+  const names = new Map<string, string>()
+  for (const project of summary.projects.slice(0, STORAGE_PROJECTS_NAMED)) {
+    const name = voted(project.folder) ?? (await recordedProject($, `${directory}/projects`, project.folder, files))
+    if (name) names.set(project.folder, name)
+  }
+  const nameOf = (folder: string) => names.get(folder) ?? folder
+  const settings = (await $.settings.read()) as { cleanupPeriodDays?: unknown }
+  const configured = typeof settings.cleanupPeriodDays === 'number' ? settings.cleanupPeriodDays : undefined
+  let folders: { name: string; bytes: number }[] = []
+  try {
+    folders = await otherFolders($, directory)
+  } catch (error) {
+    debugLog($, error)
+  }
+  await update($, storage, () => ({
+    ...summary,
+    projects: summary.projects.map(project => ({ ...project, name: nameOf(project.folder) })),
+    folders,
+    autoDays: configured ?? AUTO_CLEANUP_DEFAULT_DAYS,
+    isAutoDefault: configured === undefined,
+    root: directory.replace(homePath, '~'),
+  }))
+}
+
+/** The sessions a cleanup at the chosen age would delete, never this one. */
+async function plannedCleanup($: EngineInterface) {
+  return cleanupPlan(sessionsOf(storageFiles), await read($, cleanupDays), await $.clock.now(), [await $.session.id()])
+}
+
+/**
+ * Deletes the sessions the cleanup chose: each transcript and the session's
+ * folder. Every path is checked to lie under the projects folder first; one
+ * that does not stops the whole cleanup before anything is deleted. The usage
+ * figures already counted stay.
+ */
+async function cleanUp($: EngineInterface): Promise<string> {
+  // Measured again now: a session resumed since the tab was drawn is no longer idle.
+  await measureStorage($)
+  const plan = await plannedCleanup($)
+  if (plan.sessions.length === 0) return m.cleanupNothing(await read($, cleanupDays))
+  // Every transcript is counted before any is deleted, so the usage figures keep their tokens;
+  // one that could not be counted stops the cleanup.
+  const uncounted = await countUsage($, true)
+  if ((await read($, usageError)) !== null) throw new Error(m.usageNeedsShell)
+  if (uncounted.length > 0) throw new Error(m.cleanupUncounted(uncounted.length))
+  const root = `${await claudeDirectory($)}/projects`
+  const paths = cleanupTargets(root, plan.sessions.flatMap(session => session.paths))
+  const { isWindows } = await platformOf($)
+  for (let start = 0; start < paths.length; start += DELETE_BATCH) {
+    const { exitCode, stderr } = await $.process.run(removeTreeArgv(paths.slice(start, start + DELETE_BATCH), isWindows), { timeoutMs: 120_000 })
+    if (exitCode !== 0) throw new Error(`deleting sessions exited ${exitCode}: ${stderr.trim()}`)
+  }
+  // The count forgets the deleted transcripts' offsets; their tokens stay counted.
+  const index = await loadUsageIndex($)
+  const gone = (file: string) => paths.some(path => file === path || file.startsWith(`${path}/`))
+  usageIndex = { ...index, files: Object.fromEntries(Object.entries(index.files).filter(([file]) => !gone(file))) }
+  await saveUsageIndex($, usageIndex, usageSeen ?? new Set(usageIndex.ids))
+  await measureStorage($)
+
+  return m.cleanedUp(plan.sessions.length, byteSize(plan.bytes))
+}
+
+/** Whether the pane is among the engine's panes. */
+async function isPaneShown($: EngineInterface): Promise<boolean> {
+  return (await $.ui.panes()).some(pane => pane.id === PANE)
+}
+
+/** Shows a tab of the pane, sized to it; the Usage tab counts what the transcripts gained. */
+async function showTab($: EngineInterface, next: AccountsTabKey): Promise<void> {
+  await update($, tab, () => next)
+  await openPane($)
+  if (next === 'usage') {
+    await refreshUsageSummary($)
+    await countUsage($)
+  }
+  if (next === 'storage') await measureStorage($)
+}
+
 /**
  * Opens the accounts pane, sized to its cards: the release line, five rows per
  * account, then the footer below a blank line; or to `rows`, for a dialog
  * taller than that. With `focus` it takes the keys, and Esc asks it to close.
  */
 async function openPane($: EngineInterface, focus = false, rows?: number): Promise<void> {
-  const wanted = rows ?? Math.max(1, (await read($, accounts)).length) * 5 + 3
+  // Five rows a card, and around the cards the header, the tab bar, its rule, the margins and the
+  // footer; the Usage and Storage tabs take their figures and charts.
+  const wanted = rows ?? ((await read($, tab)) !== 'accounts' ? USAGE_ROWS : Math.max(1, (await read($, accounts)).length) * 5 + ACCOUNTS_CHROME_ROWS)
   await $.ui.open({ id: PANE, title: TAB_LABEL, rows: wanted, ...(focus ? { focus: true, closeOnEscape: true } : {}) })
   if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
 }
@@ -1175,6 +1528,11 @@ export const register: Register = (on, options) => {
 
         return { text: m.paneOpened }
       }
+      if (verb === 'usage' || verb === 'storage') {
+        await showTab($, verb)
+
+        return { text: m.paneOpened }
+      }
       if (verb === 'list') return { text: await listText($) }
       if (verb === 'refresh') {
         await refresh($, true)
@@ -1343,6 +1701,92 @@ export const register: Register = (on, options) => {
         },
       )
     }
+    if (asked?.kind === 'period') {
+      const current = await read($, usagePeriod)
+
+      return ChoiceDialog(
+        ui,
+        bodyColumns,
+        header,
+        m.usagePeriodTitle,
+        USAGE_PERIODS.map(days => ({
+          key: `period-${days}`,
+          label: m.usagePeriod(days),
+          isCurrent: days === current,
+          onPress: act(async () => {
+            await dismiss()
+            await update($, usagePeriod, () => days)
+            await refreshUsageSummary($)
+            await openPane($)
+          }),
+        })),
+        { label: m.cancel, onPress: act(dismiss) },
+        await read($, focused),
+      )
+    }
+    if (asked?.kind === 'cleanupDays') {
+      const current = await read($, cleanupDays)
+
+      return ChoiceDialog(
+        ui,
+        bodyColumns,
+        header,
+        m.cleanupDaysTitle,
+        CLEANUP_DAYS.map(days => ({
+          key: `cleanup-days-${days}`,
+          label: m.cleanupDays(days),
+          isCurrent: days === current,
+          onPress: act(async () => {
+            await dismiss()
+            await update($, cleanupDays, () => days)
+            await openPane($)
+          }),
+        })),
+        { label: m.cancel, onPress: act(dismiss) },
+        await read($, focused),
+      )
+    }
+    if (asked?.kind === 'cleanup') {
+      const days = await read($, cleanupDays)
+      const plan = await plannedCleanup($)
+
+      // Deleting sessions cannot be undone, so the word has to be typed, not a button pressed.
+      return InputDialog(
+        ui,
+        bodyColumns,
+        header,
+        m.cleanupTitle(plan.sessions.length, byteSize(plan.bytes)),
+        [
+          { text: m.cleanupWhat(days) },
+          { text: m.cleanupKeeps, tone: 'muted' },
+          { text: m.cleanupNoResume, tone: 'danger' },
+          { text: m.cleanupTypeHint(m.cleanupWord) },
+        ],
+        {
+          key: 'cleanup-word',
+          placeholder: m.cleanupPlaceholder(m.cleanupWord),
+          submitLabel: m.cleanupConfirm,
+          hasField: e.surface !== 'mobile',
+          noInput: m.cleanupNoField,
+          onSubmit: value => {
+            // A word typed wrong deletes nothing and leaves the dialog asking.
+            if (value.trim() !== m.cleanupWord) {
+              $.ui.toast(m.cleanupMismatch(m.cleanupWord))
+
+              return
+            }
+            act(async () => {
+              await dismiss()
+              await openPane($)
+
+              return cleanUp($)
+            })()
+          },
+        },
+        { label: m.cancel, onPress: act(dismiss) },
+        await read($, focused),
+      )
+    }
     // A removal in question.
     const target = asked?.kind === 'remove' ? (await read($, accounts)).find(one => one.uuid === asked.uuid) : undefined
     if (asked && target) {
@@ -1366,9 +1810,84 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const active = await read($, tab)
+    const accountRows = await read($, accounts)
+    const tabs = [
+      { key: 'accounts', label: m.tabAccounts, hotkey: '1', badge: accountRows.length > 0 ? `${accountRows.length}` : undefined },
+      { key: 'usage', label: m.tabUsage, hotkey: '2' },
+      { key: 'storage', label: m.tabStorage, hotkey: '3' },
+    ]
+    const close = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) }
+    const select = (key: string) => act(() => showTab($, key as AccountsTabKey))()
+    if (active === 'storage') {
+      return (
+        <Box flexDirection="column">
+          {Header(ui, header)}
+          {TabBar(ui, tabs, active, select)}
+          {Rule(ui, 'tabs-rule', bodyColumns)}
+          <Box key="body-storage" flexDirection="column" marginTop={1}>
+            {StorageTab(
+              ui,
+              { storage: await read($, storage), cleanupDays: await read($, cleanupDays), now: await $.clock.now(), locale, m, bodyColumns },
+              {
+                chooseDays: act(async () => {
+                  await update($, dialog, () => ({ kind: 'cleanupDays' }) as const)
+                  await openPane($, true)
+                }),
+                cleanUp: act(async () => {
+                  // The dialog names what a cleanup would delete as measured now.
+                  await measureStorage($)
+                  const plan = await plannedCleanup($)
+                  // Nothing to delete asks nothing.
+                  if (plan.sessions.length === 0) return m.cleanupNothing(await read($, cleanupDays))
+                  await update($, dialog, () => ({ kind: 'cleanup' }) as const)
+                  await openPane($, true)
+                }),
+              },
+            )}
+          </Box>
+          {Tiles(ui, bodyColumns, [{ key: 'refresh', label: m.refreshButton, isMain: true, onPress: act(() => measureStorage($)) }, close])}
+        </Box>
+      )
+    }
+    if (active === 'usage') {
+      return (
+        <Box flexDirection="column">
+          {Header(ui, header)}
+          {TabBar(ui, tabs, active, select)}
+          {Rule(ui, 'tabs-rule', bodyColumns)}
+          <Box key="body-usage" flexDirection="column" marginTop={1}>
+            {UsageTab(
+              ui,
+              {
+                summary: await read($, usageSummary),
+                scan: await read($, usageScan),
+                error: await read($, usageError),
+                period: await read($, usagePeriod),
+                m,
+                bodyColumns,
+              },
+              {
+                choosePeriod: act(async () => {
+                  await update($, dialog, () => ({ kind: 'period' }) as const)
+                  await openPane($, true)
+                }),
+              },
+            )}
+          </Box>
+          {Tiles(ui, bodyColumns, [
+            { key: 'refresh', label: (await read($, usageScan)) ? m.refreshingButton : m.refreshButton, isMain: true, onPress: act(() => countUsage($).then(() => undefined)) },
+            close,
+          ])}
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column">
         {Header(ui, header)}
+        {TabBar(ui, tabs, active, select)}
+        {Rule(ui, 'tabs-rule', bodyColumns)}
         {AccountsTab(
           ui,
           {
@@ -1403,7 +1922,7 @@ export const register: Register = (on, options) => {
             }),
           },
           { key: 'webhook', label: m.webhookButton, onPress: act(() => openWebhookDialog($)) },
-          { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) },
+          close,
         ])}
       </Box>
     )

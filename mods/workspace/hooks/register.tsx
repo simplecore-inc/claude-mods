@@ -1,16 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRow, CheckpointRow, DiffView, Note, Tab, WorktreeRow } from '../types'
-import { checkpointRef, clipDiff, promptLabel, shortPath } from './git'
+import type { AgentActivity, AgentRow, CheckpointRow, DiffPoint, DiffView, MemoryFile, MemoryKind, MemoryScope, Note, Tab, WorktreeRow } from '../types'
+import { frontmatterOf, importsOf, markdownPages, outlineOf, pageOfLine, reflow, searchMemory } from './memory'
+import { MemoryTab } from './views/memory'
+import { projectFolder } from './shared/claude'
+import { checkpointRef, clipDiff, finishAgents, keptCheckpoints, mergeCheckpoints, promptLabel, shortPath } from './git'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
-import { ChoiceDialog, Dialog, Header, Rule, TabBar, Tiles } from './shared/kit'
+import { ChoiceDialog, Dialog, Header, InputDialog, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { doneMarks, nextSeq, notesContext, numbered } from './notes'
 import type { DialogLine, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
-import { AgentsTab } from './views/agents'
-import { CheckpointsTab, clockOf } from './views/checkpoints'
-import { baseChoices, DiffTab } from './views/diff'
+import { AgentsTab, toolSummary } from './views/agents'
+import { checkpointLabel, CheckpointsTab, clockOf } from './views/checkpoints'
+import { baseChoices, commitPrompt, DiffTab, targetChoices } from './views/diff'
 import { NotesTab } from './views/notes'
 import {
   createCheckpoint,
@@ -19,9 +23,11 @@ import {
   diffSummary,
   fileDiff,
   listWorktrees,
+  mergeBase,
   removeWorktree,
   repoRoot,
   restoreCheckpoint,
+  restoreFile,
   snapshotIndexPath,
   snapshotTree,
 } from './workspace'
@@ -40,6 +46,25 @@ const clock = atom({ plugin: 'sc-workspace', key: 'clock' } as const, 0)
 const dialog = atom({ plugin: 'sc-workspace', key: 'dialog' } as const, null)
 const focused = atom({ plugin: 'sc-workspace', key: 'focused' } as const, null)
 const paneOpen = atom({ plugin: 'sc-workspace', key: 'paneOpen' } as const, false)
+const activity = atom({ plugin: 'sc-workspace', key: 'activity' } as const, {})
+const answers = atom({ plugin: 'sc-workspace', key: 'answers' } as const, {})
+const finished = atom({ plugin: 'sc-workspace', key: 'finished' } as const, [])
+const expandedAgent = atom({ plugin: 'sc-workspace', key: 'expandedAgent' } as const, null)
+const memory = atom({ plugin: 'sc-workspace', key: 'memory' } as const, null)
+const memoryQuery = atom({ plugin: 'sc-workspace', key: 'memoryQuery' } as const, '')
+const memoryScope = atom({ plugin: 'sc-workspace', key: 'memoryScope' } as const, 'all')
+const memoryOpen = atom({ plugin: 'sc-workspace', key: 'memoryOpen' } as const, null)
+const memoryPage = atom({ plugin: 'sc-workspace', key: 'memoryPage' } as const, 0)
+/** Where the organisation's policy memory sits, on macOS, Linux and WSL, and Windows: whichever exists is read. */
+const MANAGED_MEMORY = ['/Library/Application Support/ClaudeCode/CLAUDE.md', '/etc/claude-code/CLAUDE.md', 'C:/Program Files/ClaudeCode/CLAUDE.md']
+/** How many hops of `@path` imports Claude Code follows. */
+const IMPORT_HOPS = 4
+/** The largest memory file Claude Code loads whole; a larger one is skipped. */
+const MEMORY_MAX_BYTES = 4 * 1024 * 1024
+/** How deep the rules folders are searched for `.md` files. */
+const RULES_DEPTH = 6
+/** Finished agents kept for the session; older ones are let go. */
+const FINISHED_KEPT = 20
 /** Whether the accounts pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
 const accountsPaneOpen = { plugin: 'sc-accounts', key: 'paneOpen' } as const
 
@@ -72,7 +97,7 @@ function isBandCell(element: string): boolean {
 }
 /** The `/config` row of the `notesInContext` setting. */
 const NOTES_SETTING = 'sc-workspace.notesInContext'
-const TABS: Tab[] = ['agents', 'checkpoints', 'notes', 'diff']
+const TABS: Tab[] = ['agents', 'checkpoints', 'notes', 'diff', 'memory']
 const AGENTS_POLL_MS = 3000
 const WORKTREES_POLL_MS = 15_000
 /** How often the open pane's Checkpoints, Diff or Notes tab is brought up to date. */
@@ -135,7 +160,7 @@ const checkpointsKey = (project: string) => `checkpoints:${project}`
 const notesKey = (project: string) => `notes:${project}`
 
 function tabLabel(key: Tab): string {
-  return { agents: m.tabAgents, checkpoints: m.tabCheckpoints, notes: m.tabNotes, diff: m.tabDiff }[key]
+  return { agents: m.tabAgents, checkpoints: m.tabCheckpoints, notes: m.tabNotes, diff: m.tabDiff, memory: m.tabMemory }[key]
 }
 
 function projectName(): string {
@@ -175,6 +200,22 @@ async function refreshAgents($: EngineInterface): Promise<void> {
   })
   const current = await read($, agents)
   if (JSON.stringify(current) !== JSON.stringify(rows)) await update($, agents, () => rows)
+  // An agent the engine stops listing moves to the finished group, with its answer, for the session.
+  const listed = new Set(rows.map(row => row.id))
+  const kept = await read($, answers)
+  const before = await read($, finished)
+  const after = finishAgents(current, rows, before, kept, now, FINISHED_KEPT)
+  if (JSON.stringify(after) !== JSON.stringify(before)) await update($, finished, () => after)
+  // Activity and answers are kept for the agents listed or finished; the rest go.
+  const known = new Set([...listed, ...(await read($, finished)).map(row => row.id)])
+  const recorded = await read($, activity)
+  if (Object.keys(recorded).some(id => !known.has(id))) {
+    await update($, activity, value => Object.fromEntries(Object.entries(value).filter(([id]) => known.has(id))))
+  }
+  const answered = await read($, answers)
+  if (Object.keys(answered).some(id => !known.has(id))) {
+    await update($, answers, value => Object.fromEntries(Object.entries(value).filter(([id]) => known.has(id))))
+  }
   // While an agent works its elapsed time moves: a clock tick redraws the rows that read it.
   if (rows.some(row => row.status === 'running' || row.status === 'pending' || row.status === 'waiting')) {
     await update($, clock, () => now)
@@ -205,12 +246,14 @@ async function dropWorktree($: EngineInterface, row: WorktreeRow): Promise<strin
 
 // ── checkpoints ───────────────────────────────────────────────────────────
 
+/**
+ * Keeps the checkpoints in the store with what changed since each as last
+ * counted, so a reload or a new session shows the counts at once; the next
+ * count replaces them.
+ */
 async function saveCheckpoints($: EngineInterface, list: CheckpointRow[]): Promise<void> {
   if (!root) return
-  await $.store.set(
-    checkpointsKey(root),
-    list.map(({ since: _since, ...row }) => row),
-  )
+  await $.store.set(checkpointsKey(root), list)
   await update($, checkpoints, () => list)
 }
 
@@ -222,18 +265,22 @@ async function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], l
   if (!root) return null
   const run = runner($)
   const tree = await snapshot($)
-  const list = await read($, checkpoints)
+  // Another session of this project may have added rows since this one read them: those are kept.
+  const stored = await $.store.get(checkpointsKey(root))
+  const list = mergeCheckpoints(await read($, checkpoints), Array.isArray(stored) ? (stored as CheckpointRow[]) : [])
   if (!force && list[0]?.tree === tree) return null
   const own = list.filter(row => row.ref.includes(`/${sessionId}/`))
   const seq = own.reduce((max, row) => Math.max(max, Number(row.ref.split('/').pop()) || 0), 0) + 1
   const ref = checkpointRef(sessionId, seq)
   const { commit } = await createCheckpoint(run, root, ref, label || m.checkpointKind[kind], tree)
   const row: CheckpointRow = { ref, commit, tree, at: await $.clock.now(), label, kind, since: { files: 0, added: 0, removed: 0 } }
-  const kept = [row, ...list]
-  for (const old of kept.slice(CHECKPOINTS_KEPT)) {
+  // Pinned checkpoints are kept whatever their age, and this session's start, the Diff tab's
+  // default base; the newest 50 others besides.
+  const { kept, gone } = keptCheckpoints([row, ...list], CHECKPOINTS_KEPT, baseline ? [baseline.ref] : [])
+  for (const old of gone) {
     await deleteRef(run, root, old.ref).catch((error: unknown) => debug($, error))
   }
-  await saveCheckpoints($, kept.slice(0, CHECKPOINTS_KEPT))
+  await saveCheckpoints($, kept)
 
   return row
 }
@@ -254,7 +301,37 @@ async function refreshSince($: EngineInterface): Promise<void> {
   for (const row of shown) counted.set(row.ref, await diffSummary(run, root, row.commit, tree))
   // Merged by ref into the list as it stands now: a checkpoint taken while these were counted stays.
   const changed = list.some(row => counted.has(row.ref) && JSON.stringify(counted.get(row.ref)) !== JSON.stringify(row.since))
-  if (changed) await update($, checkpoints, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
+  if (!changed) return
+  const merged = await update($, checkpoints, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
+  await $.store.set(checkpointsKey(root), merged)
+}
+
+/** Pins a checkpoint, or unpins it: a pinned one is never deleted to make room. */
+async function togglePin($: EngineInterface, ref: string): Promise<string> {
+  const list = await read($, checkpoints)
+  const row = list.find(one => one.ref === ref)
+  if (!row) return m.checkpointsEmpty
+  await saveCheckpoints($, list.map(one => (one.ref === ref ? { ...one, isPinned: !one.isPinned } : one)))
+
+  return row.isPinned ? m.unpinned : m.pinned
+}
+
+/** Names a checkpoint and pins it; an empty name takes the name away and leaves the pin. */
+async function nameCheckpoint($: EngineInterface, ref: string, name: string): Promise<string | void> {
+  const clean = name.replace(/\s+/g, ' ').trim()
+  const list = await read($, checkpoints)
+  if (!list.some(one => one.ref === ref)) return m.checkpointsEmpty
+  await saveCheckpoints(
+    $,
+    list.map(one => {
+      if (one.ref !== ref) return one
+      const { name: _old, ...rest } = one
+
+      return clean ? { ...rest, name: clean, isPinned: true } : rest
+    }),
+  )
+
+  return clean ? m.named(clean) : undefined
 }
 
 async function restore($: EngineInterface, row: CheckpointRow): Promise<string> {
@@ -268,29 +345,96 @@ async function restore($: EngineInterface, row: CheckpointRow): Promise<string> 
   return m.restored(clockOf(row.at, await $.clock.now(), locale))
 }
 
+/** Puts one file of the Diff tab back as it was at the base, after a checkpoint that undoes it. */
+async function restoreOneFile($: EngineInterface, path: string): Promise<string> {
+  if (!root) throw new Error(m.checkpointsNeedGit)
+  const view = await read($, diff)
+  const file = view?.files.find(one => one.path === path)
+  if (!view || !file) return m.diffEmpty
+  const before = await takeCheckpoint($, 'restore', m.checkpointKind.restore, true)
+  if (!before) throw new Error(m.checkpointsNeedGit)
+  await restoreFile(runner($), root, view.base.commit, file, isWindows)
+  await update($, diff, current => (current && current.selected?.path === path ? { ...current, selected: undefined } : current))
+  await refreshDiff($)
+  await refreshSince($)
+
+  return m.fileRestored(path)
+}
+
+/** Records what an agent did last, for the Agents tab. */
+async function recordActivity($: EngineInterface, agentId: string, entry: Omit<AgentActivity, 'at'>): Promise<void> {
+  const at = await $.clock.now()
+  await update($, activity, current => ({ ...current, [agentId]: { ...entry, at } }))
+}
+
 // ── diff ──────────────────────────────────────────────────────────────────
 
-/** Compares the working tree with `base` (the current one when absent), keeping the open file open. */
-async function refreshDiff($: EngineInterface, base?: DiffView['base']): Promise<void> {
+/** A snapshot of another worktree, untracked files included, in an index of its own for this session. */
+async function worktreeTree($: EngineInterface, path: string): Promise<string> {
+  const run = runner($)
+
+  return snapshotTree(run, path, await snapshotIndexPath(run, path, sessionId))
+}
+
+/** Shows another worktree's changes since its branch parted from the main branch, on the Diff tab. */
+async function openWorktreeDiff($: EngineInterface, row: WorktreeRow): Promise<void> {
+  if (!root || !row.branch) return
+  const main = (await read($, worktrees)).find(one => one.isMain)?.branch
+  if (!main) throw new Error(m.detached)
+  const run = runner($)
+  const commit = await mergeBase(run, root, main, row.branch)
+  const files = await diffFiles(run, root, commit, await worktreeTree($, row.path))
+  await update($, tab, () => 'diff')
+  await update($, diff, () => ({
+    base: { commit, label: main, at: 0, isSessionStart: false },
+    worktree: { path: row.path, branch: row.branch ?? '' },
+    files,
+    at: Date.now(),
+  }))
+}
+
+/** The commit or tree the Diff tab compares up to: a checkpoint's commit, or a snapshot of the working tree. */
+async function targetTree($: EngineInterface, target: DiffPoint | undefined): Promise<string> {
+  return target ? target.commit : snapshot($)
+}
+
+/**
+ * Compares `base` (the current one when absent) with `target`: a later
+ * checkpoint, or the working tree when null; the current target when absent.
+ * A base picked at or after the target compares with the working tree. The
+ * open file stays open while the ends stay.
+ */
+async function refreshDiff($: EngineInterface, base?: DiffPoint, target?: DiffPoint | null): Promise<void> {
   if (!root) return
   const current = await read($, diff)
+  // Another worktree's view stays on it until it is closed; only its files are counted again.
+  if (current?.worktree && base === undefined && target === undefined) {
+    const files = await diffFiles(runner($), root, current.base.commit, await worktreeTree($, current.worktree.path))
+    if (JSON.stringify(files) !== JSON.stringify(current.files)) await update($, diff, view => (view ? { ...view, files, selected: undefined } : view))
+
+    return
+  }
   const start = baseline ?? (await read($, checkpoints)).find(row => row.kind === 'session')
-  const target = base ?? current?.base ?? (start ? { commit: start.commit, label: m.checkpointKind.session, at: start.at, isSessionStart: true } : undefined)
-  if (!target) return
+  const from = base ?? current?.base ?? (start ? { commit: start.commit, label: m.checkpointKind.session, at: start.at, isSessionStart: true } : undefined)
+  if (!from) return
+  const wanted = target === null ? undefined : (target ?? current?.target)
+  const to = wanted && wanted.at > from.at ? wanted : undefined
   const run = runner($)
-  const tree = await snapshot($)
-  const files = await diffFiles(run, root, target.commit, tree)
-  const openPath = base ? undefined : current?.selected?.path
+  const tree = await targetTree($, to)
+  const files = await diffFiles(run, root, from.commit, tree)
+  const isSameEnds = !base && target === undefined
+  const openPath = isSameEnds ? current?.selected?.path : undefined
   let selected: DiffView['selected']
   if (openPath && files.some(file => file.path === openPath)) {
-    selected = { path: openPath, ...clipDiff(await fileDiff(run, root, target.commit, tree, openPath), DIFF_LINES) }
+    selected = { path: openPath, ...clipDiff(await fileDiff(run, root, from.commit, tree, openPath), DIFF_LINES) }
   }
   const isSame =
     current !== null &&
-    current.base.commit === target.commit &&
+    current.base.commit === from.commit &&
+    current.target?.commit === to?.commit &&
     JSON.stringify(current.files) === JSON.stringify(files) &&
     JSON.stringify(current.selected) === JSON.stringify(selected)
-  if (!isSame) await update($, diff, () => ({ base: target, files, selected, at: Date.now() }))
+  if (!isSame) await update($, diff, () => ({ base: from, target: to, files, selected, at: Date.now() }))
 }
 
 async function openFile($: EngineInterface, path: string): Promise<void> {
@@ -302,9 +446,155 @@ async function openFile($: EngineInterface, path: string): Promise<void> {
     return
   }
   const run = runner($)
-  const tree = await snapshot($)
+  const tree = current.worktree ? await worktreeTree($, current.worktree.path) : await targetTree($, current.target)
   const selected = { path, ...clipDiff(await fileDiff(run, root, current.base.commit, tree, path), DIFF_LINES) }
   await update($, diff, view => (view ? { ...view, selected } : view))
+}
+
+// ── memory ────────────────────────────────────────────────────────────────
+
+/**
+ * The rows a reader page takes at the pane's width: the reader opens the pane
+ * 40 rows tall, and the header, the frame, the title, its line and the tiles
+ * take the rest. Fixed, not read from the pane: a pane sizes itself to what it
+ * draws, so a page cut to the rows on screen would shrink with every page.
+ */
+const READER_PAGE_ROWS = 26
+/** The pane's rows while the reader is open. */
+const READER_PANE_ROWS = 40
+/** The columns a reader page wraps at, as the pane last drew; a page is cut to them. */
+let readerRoom: { rows: number; columns?: number } = { rows: READER_PAGE_ROWS }
+
+/** Each memory file's text as last read, for the search; the files themselves are in the `memory` state. */
+const memoryTexts = new Map<string, string>()
+
+/** A file's text when it is a file Claude Code would load whole; null otherwise. */
+async function memoryText($: EngineInterface, path: string): Promise<string | null> {
+  try {
+    if (!(await $.fs.exists(path))) return null
+    const stat = await $.fs.stat(path)
+    if (stat.kind !== 'file' || stat.size > MEMORY_MAX_BYTES) return null
+
+    return await $.fs.read(path)
+  } catch (error) {
+    debug($, error)
+
+    return null
+  }
+}
+
+/** Every `.md` file under `folder`, its subfolders included. */
+async function markdownUnder($: EngineInterface, folder: string, depth = 1): Promise<string[]> {
+  if (depth > RULES_DEPTH || !(await $.fs.exists(folder))) return []
+  const found: string[] = []
+  for (const entry of await $.fs.list(folder)) {
+    const path = `${folder}/${entry.name}`
+    if (entry.kind === 'dir') found.push(...(await markdownUnder($, path, depth + 1)))
+    else if (entry.name.endsWith('.md')) found.push(path)
+  }
+
+  return found.sort()
+}
+
+/** A path as the Memory tab shows it: from the project when inside it, from home with `~` when under it. */
+function memoryDisplay(path: string, project: string): string {
+  if (path.startsWith(`${project}/`)) return path.slice(project.length + 1)
+  if (home && path.startsWith(`${home}/`)) return `~${path.slice(home.length)}`
+
+  return path
+}
+
+/** The folders from `folder` up to the filesystem's root, nearest first. */
+function foldersUp(folder: string): string[] {
+  const found: string[] = []
+  let current = folder
+  while (current !== '' && current !== '/') {
+    found.push(current)
+    const parent = current.slice(0, current.lastIndexOf('/'))
+    if (parent === current) break
+    current = parent
+  }
+
+  return found
+}
+
+/**
+ * Reads every memory file Claude Code loads in this session, as its memory
+ * documentation lists them, with the files each imports, and keeps their
+ * outlines for the Memory tab.
+ */
+async function loadMemory($: EngineInterface): Promise<void> {
+  const run = runner($)
+  const cwd = (await $.session.root()).replaceAll('\\', '/')
+  const project = root ?? cwd
+  const configDir = ((await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home ?? ''}/.claude`).replaceAll('\\', '/')
+  const files: MemoryFile[] = []
+  const seen = new Set<string>()
+  memoryTexts.clear()
+  const add = async (path: string, scope: MemoryScope, kind: MemoryKind, hops = 0, note?: string): Promise<boolean> => {
+    if (seen.has(path)) return true
+    const text = await memoryText($, path)
+    if (text === null) return false
+    seen.add(path)
+    memoryTexts.set(path, text)
+    const front = frontmatterOf(text)
+    // A rule with `paths` in its frontmatter loads only when Claude works on a file it matches.
+    const isPathRule = kind === 'rule' && /^---\r?\n[\s\S]*?^paths\s*:/m.test(text)
+    files.push({
+      path,
+      display: memoryDisplay(path, project),
+      scope,
+      kind: isPathRule ? 'pathRule' : kind,
+      bytes: new TextEncoder().encode(text).length,
+      lines: text.split(/\r?\n/).length,
+      outline: outlineOf(text),
+      ...(note ? { note } : kind === 'auto' && front.description ? { note: front.description } : {}),
+    })
+    if (hops < IMPORT_HOPS) {
+      for (const imported of importsOf(text, path, home ?? '')) await add(imported, scope, 'imported', hops + 1, memoryDisplay(path, project))
+    }
+
+    return true
+  }
+  for (const path of MANAGED_MEMORY) await add(path, 'global', 'managed')
+  await add(`${configDir}/CLAUDE.md`, 'global', 'user')
+  for (const path of await markdownUnder($, `${configDir}/rules`)) await add(path, 'global', 'userRule')
+  // CLAUDE.md and CLAUDE.local.md load from the working directory and every folder above it.
+  let hasInstructions = false
+  for (const folder of foldersUp(cwd)) {
+    const isInside = folder === project || folder.startsWith(`${project}/`)
+    if (await add(`${folder}/CLAUDE.md`, 'project', isInside ? 'project' : 'parent')) hasInstructions = true
+    if (await add(`${folder}/CLAUDE.local.md`, 'project', isInside ? 'local' : 'parent')) hasInstructions = true
+  }
+  await add(`${project}/.claude/CLAUDE.md`, 'project', 'project')
+  for (const path of await markdownUnder($, `${project}/.claude/rules`)) await add(path, 'project', 'rule')
+  // AGENTS.md is read only where no CLAUDE.md or CLAUDE.local.md is.
+  if (!hasInstructions) await add(`${cwd}/AGENTS.md`, 'project', 'agents')
+  // A subfolder's CLAUDE.md loads when Claude reads files in that folder.
+  if (root) {
+    const listed = await run(['git', 'ls-files', '-co', '--exclude-standard'], { cwd: root, timeoutMs: 30_000 })
+    if (listed.exitCode === 0) {
+      for (const relative of listed.stdout.split('\n')) {
+        if (!/(^|\/)CLAUDE(\.local)?\.md$/.test(relative)) continue
+        await add(`${root}/${relative}`, 'project', 'subfolder')
+      }
+    }
+  }
+  // Auto memory is kept per git repository, so every worktree of one shares it.
+  const settings = (await $.settings.read()) as { autoMemoryDirectory?: unknown }
+  let memoryRoot = project
+  if (root) {
+    const common = await run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root })
+    if (common.exitCode === 0) memoryRoot = common.stdout.trim().replace(/\/\.git\/?$/, '')
+  }
+  const autoFolder = typeof settings.autoMemoryDirectory === 'string' ? settings.autoMemoryDirectory.replace(/^~(?=\/)/, home ?? '~') : `${configDir}/projects/${projectFolder(memoryRoot)}/memory`
+  await add(`${autoFolder}/MEMORY.md`, 'project', 'autoIndex', 0, memoryDisplay(autoFolder, project))
+  for (const path of await markdownUnder($, autoFolder)) if (!path.endsWith('/MEMORY.md')) await add(path, 'project', 'auto')
+  // Auto memory's folder is long and named once, under its index: each file is shown from it.
+  const shortened = files.map(file =>
+    file.path.startsWith(`${autoFolder}/`) ? { ...file, display: `memory/${file.path.slice(autoFolder.length + 1)}` } : file,
+  )
+  await update($, memory, () => shortened)
 }
 
 // ── notes ─────────────────────────────────────────────────────────────────
@@ -317,8 +607,9 @@ async function saveNotes($: EngineInterface, list: Note[]): Promise<void> {
 async function addNote($: EngineInterface, text: string): Promise<string | void> {
   const clean = text.trim()
   if (!clean) return
-  const note: Note = { id: crypto.randomUUID(), text: clean, isDone: false, at: await $.clock.now() }
-  await saveNotes($, [note, ...(await read($, notes))])
+  const list = await read($, notes)
+  const note: Note = { id: crypto.randomUUID(), text: clean, isDone: false, at: await $.clock.now(), seq: nextSeq(list) }
+  await saveNotes($, [note, ...list])
 
   return m.noteAdded(clean.length > 40 ? `${clean.slice(0, 39)}…` : clean)
 }
@@ -327,8 +618,27 @@ async function addNote($: EngineInterface, text: string): Promise<string | void>
 async function reloadNotes($: EngineInterface): Promise<void> {
   if (!root) return
   const stored = await $.store.get(notesKey(root))
-  const list = Array.isArray(stored) ? (stored as Note[]) : []
+  const list = numberedNotes(stored)
+  // A note made before numbering gets its number once, in the store too, so it keeps it.
+  if (JSON.stringify(list) !== JSON.stringify(stored)) await $.store.set(notesKey(root), list)
   if (JSON.stringify(list) !== JSON.stringify(await read($, notes))) await update($, notes, () => list)
+}
+
+/** The stored notes, each with its number. */
+function numberedNotes(stored: unknown): Note[] {
+  return numbered(Array.isArray(stored) ? (stored as Note[]) : [])
+}
+
+/** Marks the notes an answer says it finished, for the person to confirm. */
+async function suggestDone($: EngineInterface, answer: string): Promise<void> {
+  const marked = new Set(doneMarks(answer))
+  if (marked.size === 0) return
+  const list = await read($, notes)
+  if (!list.some(note => !note.isDone && note.seq !== undefined && marked.has(note.seq))) return
+  await saveNotes(
+    $,
+    list.map(note => (!note.isDone && note.seq !== undefined && marked.has(note.seq) ? { ...note, isSuggestedDone: true } : note)),
+  )
 }
 
 /** Whether a refresh of the visible tab is running: a second one asked meanwhile is dropped. */
@@ -345,6 +655,7 @@ async function refreshVisible($: EngineInterface): Promise<void> {
     if (active === 'checkpoints') await refreshSince($)
     if (active === 'diff') await refreshDiff($)
     if (active === 'notes') await reloadNotes($)
+    if (active === 'memory') await loadMemory($)
   } finally {
     isLiveRefreshing = false
   }
@@ -367,6 +678,7 @@ async function openPane($: EngineInterface, next?: Tab): Promise<void> {
   if (active === 'checkpoints') await refreshSince($)
   if (active === 'diff') await refreshDiff($)
   if (active === 'notes') await reloadNotes($)
+  if (active === 'memory') await loadMemory($)
   if (active === 'agents') await Promise.all([refreshAgents($), refreshWorktrees($)])
 }
 
@@ -403,8 +715,7 @@ async function adoptSession($: EngineInterface): Promise<void> {
   await update($, repoError, () => (root ? null : m.checkpointsNeedGit))
   await update($, diff, () => null)
   if (root) {
-    const storedNotes = await $.store.get(notesKey(root))
-    await update($, notes, () => (Array.isArray(storedNotes) ? (storedNotes as Note[]) : []))
+    await reloadNotes($)
     const storedCheckpoints = await $.store.get(checkpointsKey(root))
     await update($, checkpoints, () => (Array.isArray(storedCheckpoints) ? (storedCheckpoints as CheckpointRow[]) : []))
     // A reload runs this again in the same session: its start is the checkpoint already taken, never a new one.
@@ -438,10 +749,10 @@ async function isPaneOpen($: EngineInterface): Promise<boolean> {
 
 /**
  * What the dialog asks about: one checkpoint to restore, note to delete, agent
- * to stop or worktree to remove; or, for `base`, which checkpoint the Diff tab
- * compares with (`ref` unused).
+ * to stop, worktree to remove or file to put back (`file`, by path); or, for
+ * `base` and `target`, which checkpoints the Diff tab compares (`ref` unused).
  */
-type Dialog = { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base'; ref: string }
+type Dialog = { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base' | 'target' | 'file' | 'name' | 'memoryScope' | 'memoryRead'; ref: string }
 
 /** The checkpoints the Diff tab's base is picked from: the newest shown, and the session's own start. */
 async function baseCandidates($: EngineInterface) {
@@ -452,7 +763,7 @@ async function baseCandidates($: EngineInterface) {
 
   return listed.map(row => ({
     commit: row.commit,
-    label: row.label || m.checkpointKind[row.kind],
+    label: checkpointLabel(row, m),
     at: row.at,
     isSessionStart: row.kind === 'session',
     since: row.since,
@@ -467,7 +778,7 @@ async function dialogSpec(
   $: EngineInterface,
   asked: Dialog,
 ): Promise<{ title: string; lines: DialogLine[]; confirm: string; run: () => Promise<string | void> } | null> {
-  if (asked.kind === 'base') return null
+  if (asked.kind === 'base' || asked.kind === 'target' || asked.kind === 'name' || asked.kind === 'memoryScope' || asked.kind === 'memoryRead') return null
   const now = await $.clock.now()
   if (asked.kind === 'restore') {
     const row = (await read($, checkpoints)).find(one => one.ref === asked.ref)
@@ -477,12 +788,32 @@ async function dialogSpec(
     return {
       title: m.restoreTitle(clockOf(row.at, now, locale)),
       lines: [
-        { text: m.restoreFrom(row.label || m.checkpointKind[row.kind]) },
+        { text: m.restoreFrom(checkpointLabel(row, m)) },
         ...(since && since.files > 0 ? [{ text: m.restoreUndoes(m.filesCount(since.files), since.added, since.removed), tone: 'danger' as const }] : []),
         { text: m.restoreUndoHint, tone: 'muted' as const },
       ],
       confirm: m.restoreConfirm,
       run: () => restore($, row),
+    }
+  }
+  if (asked.kind === 'file') {
+    const view = await read($, diff)
+    const file = view && !view.target ? view.files.find(one => one.path === asked.ref) : undefined
+    if (!view || !file) return null
+
+    return {
+      title: m.fileRestoreTitle(file.path, clockOf(view.base.at, now, locale)),
+      lines: [
+        { text: m.restoreFrom(view.base.label) },
+        file.status === 'added'
+          ? { text: m.fileRestoreAdded, tone: 'danger' as const }
+          : file.status === 'renamed' && file.from
+            ? { text: m.fileRestoreRenamed(file.from), tone: 'danger' as const }
+            : { text: m.fileRestoreUndoes(file.added ?? 0, file.removed ?? 0), tone: 'danger' as const },
+        { text: m.restoreUndoHint, tone: 'muted' as const },
+      ],
+      confirm: m.fileRestoreConfirm,
+      run: () => restoreOneFile($, file.path),
     }
   }
   if (asked.kind === 'note') {
@@ -595,6 +926,12 @@ export const register: Register = (on, options) => {
 
   // A file-changing tool call, a subagent's too, refreshes the visible tab once the burst settles.
   on('tool.call', async ($, e, next) => {
+    // A subagent's or a teammate's call is what it is doing now.
+    if (e.agentId) {
+      void recordActivity($, e.agentId, { text: toolSummary(String(e.tool), e as unknown as Record<string, unknown>), isAnswer: false }).catch(
+        (error: unknown) => debug($, error),
+      )
+    }
     const result = await next(e)
     if (FILE_TOOLS.has(String(e.tool))) scheduleLiveRefresh($)
 
@@ -625,6 +962,23 @@ export const register: Register = (on, options) => {
   // After a turn the open pane catches up: changes since each checkpoint, the diff, the worktrees.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    // An agent's turn ends with its answer: its first line is what it did last, and the whole is
+    // kept for the finished group. Its status is read again at once, so the row never shows
+    // `running` beside an answer.
+    if (e.agentId) {
+      const agentId = e.agentId
+      const answer = e.answer.trim()
+      void (async () => {
+        if (answer !== '') {
+          await recordActivity($, agentId, { text: answer.split('\n')[0] ?? '', isAnswer: true })
+          await update($, answers, value => ({ ...value, [agentId]: answer }))
+        }
+        await refreshAgents($)
+      })().catch((error: unknown) => debug($, error))
+    } else if (isNotesInContext) {
+      // The main loop's answer may say it finished a note sent with the prompt.
+      void suggestDone($, e.answer).catch((error: unknown) => debug($, error))
+    }
     void (async () => {
       if (!(await isPaneOpen($))) return
       const active = await read($, tab)
@@ -641,7 +995,7 @@ export const register: Register = (on, options) => {
     if (!isNotesInContext) return next(e)
     const open = (await read($, notes)).filter(note => !note.isDone)
     if (open.length === 0) return next(e)
-    const block = [`Open notes for ${projectName()}:`, ...open.map(note => `- ${note.text}`)].join('\n')
+    const block = notesContext(projectName(), open)
 
     return next({ ...e, context: [...(e.context ?? []), block] })
   })
@@ -666,6 +1020,15 @@ export const register: Register = (on, options) => {
         await openPane($, 'notes')
 
         return { text: added ?? m.paneOpened(tabLabel('notes')) }
+      }
+      // `name <text>`: names the newest checkpoint and pins it, where the surface has no field for the dialog.
+      if (first === 'name' && rest.length > 0) {
+        const newest = (await read($, checkpoints))[0]
+        if (!newest) return { text: m.checkpointsEmpty }
+        const named = await nameCheckpoint($, newest.ref, rest.join(' '))
+        await openPane($, 'checkpoints')
+
+        return { text: named ?? m.paneOpened(tabLabel('checkpoints')) }
       }
       if ((TABS as string[]).includes(first)) {
         await openPane($, first as Tab)
@@ -692,6 +1055,8 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box } = ui
     const bodyColumns = e.props.bodyColumns ?? 60
+    // A reader page wraps at the pane's width, kept from every draw so a search hit opens at the right page.
+    readerRoom = { rows: READER_PAGE_ROWS, columns: bodyColumns - 6 }
     // With the accounts pane open beside it, the engine draws a tab row above the header.
     const isUnderTabs = (await $.state.get(accountsPaneOpen)).value === true
     const header = { brand: paneName(), release: release.version ? m.release(release.version, release.date) : undefined, isUnderTabs }
@@ -722,6 +1087,115 @@ export const register: Register = (on, options) => {
         { label: m.cancel, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
         await read($, focused),
       )
+    }
+    if (asked?.kind === 'target') {
+      const now = await $.clock.now()
+      const view = await read($, diff)
+      if (view) {
+        const candidates = (await baseCandidates($)).map(({ since: _since, ...point }) => point)
+
+        return ChoiceDialog(
+          ui,
+          bodyColumns,
+          header,
+          m.targetTitle,
+          targetChoices(candidates, view, now, locale, m).map(choice => ({
+            ...choice,
+            onPress: () => {
+              void (async () => {
+                await dismiss()
+                if (!choice.isCurrent) await refreshDiff($, undefined, choice.target)
+              })().catch((error: unknown) => $.ui.toast(message(error)))
+            },
+          })),
+          { label: m.cancel, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+          await read($, focused),
+        )
+      }
+    }
+    if (asked?.kind === 'memoryRead') {
+      const file = (await read($, memory))?.find(one => one.path === asked.ref)
+      const text = memoryTexts.get(asked.ref)
+      if (file && text !== undefined) {
+        const pages = markdownPages(text, readerRoom)
+        const index = Math.min(Math.max(0, await read($, memoryPage)), pages.length - 1)
+        const front = frontmatterOf(text)
+        const turn = (step: number) => () => {
+          void update($, memoryPage, () => index + step).catch((error: unknown) => debug($, error))
+        }
+        // An auto-memory file leads with its name and description; its frontmatter is not drawn.
+        const lead = front.name ? `**${front.name}**${front.description ? `: ${front.description}` : ''}\n\n` : ''
+
+        return ReaderDialog(
+          ui,
+          bodyColumns,
+          header,
+          file.display,
+          m.readerSubtitle(file.path.replace(home ?? '\u0000', '~'), m.memoryKind[file.kind], m.memoryLines(file.lines)),
+          // Lines wrapped in the file read as the paragraphs they are.
+          reflow(index === 0 ? `${lead}${pages[index]?.text ?? ''}` : (pages[index]?.text ?? '')),
+          { index, count: pages.length, label: m.readerPage(index + 1, pages.length) },
+          {
+            previous: { label: m.readerPrevious, onPress: turn(-1) },
+            next: { label: m.readerNext, onPress: turn(1) },
+            close: { label: m.closeButton, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+          },
+          await read($, focused),
+        )
+      }
+    }
+    if (asked?.kind === 'memoryScope') {
+      const current = await read($, memoryScope)
+      const scopes = ['all', 'global', 'project'] as const
+
+      return ChoiceDialog(
+        ui,
+        bodyColumns,
+        header,
+        m.memoryScopeTitle,
+        scopes.map(scope => ({
+          key: `memory-scope-${scope}`,
+          label: m.memoryScope[scope],
+          isCurrent: scope === current,
+          onPress: () => {
+            void (async () => {
+              await dismiss()
+              await update($, memoryScope, () => scope)
+            })().catch((error: unknown) => $.ui.toast(message(error)))
+          },
+        })),
+        { label: m.cancel, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+        await read($, focused),
+      )
+    }
+    if (asked?.kind === 'name') {
+      const row = (await read($, checkpoints)).find(one => one.ref === asked.ref)
+      if (row) {
+        return InputDialog(
+          ui,
+          bodyColumns,
+          header,
+          m.nameTitle(clockOf(row.at, await $.clock.now(), locale)),
+          [{ text: m.restoreFrom(checkpointLabel(row, m)) }, { text: m.nameHint, tone: 'muted' }],
+          {
+            key: 'checkpoint-name',
+            placeholder: m.namePlaceholder,
+            ...(row.name ? { value: row.name } : {}),
+            submitLabel: m.nameSave,
+            hasField: e.surface !== 'mobile',
+            noInput: m.nameNoInput,
+            onSubmit: value => {
+              void (async () => {
+                await dismiss()
+                const text = await nameCheckpoint($, row.ref, value)
+                if (text) $.ui.toast(text)
+              })().catch((error: unknown) => $.ui.toast(message(error)))
+            },
+          },
+          { label: m.cancel, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+          await read($, focused),
+        )
+      }
     }
     const spec = asked ? await dialogSpec($, asked) : null
     if (asked && spec) {
@@ -783,6 +1257,7 @@ export const register: Register = (on, options) => {
       { key: 'checkpoints', label: m.tabCheckpoints, hotkey: '2', badge: checkpointRows.length > 0 ? `${checkpointRows.length}` : undefined },
       { key: 'notes', label: m.tabNotes, hotkey: '3', badge: openNotes > 0 ? `${openNotes}` : undefined },
       { key: 'diff', label: m.tabDiff, hotkey: '4', badge: diffView && diffView.files.length > 0 ? `${diffView.files.length}` : undefined },
+      { key: 'memory', label: m.tabMemory, hotkey: '5' },
     ]
     const close: Tile = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) }
     const refreshTile = (work: () => Promise<void>): Tile => ({
@@ -803,8 +1278,21 @@ export const register: Register = (on, options) => {
           compare: row =>
             act(async () => {
               await update($, tab, () => 'diff')
-              await refreshDiff($, { commit: row.commit, label: row.label || m.checkpointKind[row.kind], at: row.at, isSessionStart: row.kind === 'session' })
+              await update($, diff, view => (view?.worktree ? null : view))
+              await refreshDiff($, { commit: row.commit, label: checkpointLabel(row, m), at: row.at, isSessionStart: row.kind === 'session' }, null)
             })(),
+          compareTurn: (row, next) =>
+            act(async () => {
+              await update($, tab, () => 'diff')
+              await update($, diff, view => (view?.worktree ? null : view))
+              await refreshDiff(
+                $,
+                { commit: row.commit, label: checkpointLabel(row, m), at: row.at, isSessionStart: row.kind === 'session' },
+                { commit: next.commit, label: checkpointLabel(next, m), at: next.at, isSessionStart: next.kind === 'session' },
+              )
+            })(),
+          name: row => ask('name', row.ref),
+          togglePin: row => act(() => togglePin($, row.ref))(),
         },
       )
       tiles = [
@@ -831,7 +1319,7 @@ export const register: Register = (on, options) => {
             act(() =>
               saveNotes(
                 $,
-                noteRows.map(one => (one.id === note.id ? { ...one, isDone: !one.isDone } : one)),
+                noteRows.map(one => (one.id === note.id ? { ...one, isDone: !one.isDone, isSuggestedDone: false } : one)),
               ),
             )(),
           insert: note =>
@@ -856,6 +1344,46 @@ export const register: Register = (on, options) => {
         },
         close,
       ]
+    } else if (active === 'memory') {
+      const files = await read($, memory)
+      const scope = await read($, memoryScope)
+      const query = await read($, memoryQuery)
+      const searched = (files ?? []).filter(file => scope === 'all' || file.scope === scope)
+      body = MemoryTab(
+        ui,
+        {
+          files,
+          scope,
+          query,
+          hits: searchMemory(
+            searched.map(file => ({ path: file.path, text: memoryTexts.get(file.path) ?? '' })),
+            query,
+          ),
+          open: await read($, memoryOpen),
+          hasField: e.surface !== 'mobile',
+          m,
+          bodyColumns,
+        },
+        {
+          chooseScope: () => ask('memoryScope', ''),
+          search: value => act(() => update($, memoryQuery, () => value).then(() => undefined))(),
+          toggle: file => act(() => update($, memoryOpen, open => (open === file.path ? null : file.path)).then(() => undefined))(),
+          read: (file, line) =>
+            act(async () => {
+              const text = memoryTexts.get(file.path) ?? ''
+              await update($, memoryPage, () => (line === undefined ? 0 : pageOfLine(markdownPages(text, readerRoom), line)))
+              await update($, dialog, () => ({ kind: 'memoryRead', ref: file.path }))
+              await $.ui.open({ id: PANE, title: TAB_LABEL, focus: true, closeOnEscape: true, rows: READER_PANE_ROWS })
+            })(),
+          insert: file =>
+            act(async () => {
+              await $.prompt.fill({ text: `@${file.path} `, mode: 'insert' })
+
+              return m.memoryInserted(file.display)
+            })(),
+        },
+      )
+      tiles = [refreshTile(() => loadMemory($)), close]
     } else if (active === 'diff') {
       body = DiffTab(
         ui,
@@ -876,16 +1404,41 @@ export const register: Register = (on, options) => {
           // The dialog shows what changed since each checkpoint, counted here when it opens:
           // nothing else counts them outside the Checkpoints tab.
           chooseBase: () => ask('base', '', () => refreshSince($)),
+          chooseTarget: () => ask('target', ''),
+          restoreFile: path => ask('file', path),
+          closeWorktree: () =>
+            act(async () => {
+              await update($, diff, () => null)
+              await refreshDiff($)
+            })(),
         },
       )
-      tiles = [refreshTile(() => refreshDiff($)), close]
+      const draft: Tile = {
+        key: 'draft-commit',
+        label: m.draftCommit,
+        onPress: act(async () => {
+          const view = await read($, diff)
+          if (!view || view.files.length === 0) return m.diffEmpty
+          await $.prompt.fill({ text: commitPrompt(view, now, locale, m), mode: 'replace' })
+
+          return m.draftCommitFilled
+        }),
+      }
+      tiles = diffView && diffView.files.length > 0 ? [refreshTile(() => refreshDiff($)), draft, close] : [refreshTile(() => refreshDiff($)), close]
     } else {
       body = AgentsTab(
         ui,
-        { agents: agentRows, worktrees: await read($, worktrees), repoError: error, root: root ?? '', home, now, m },
+        {
+          agents: agentRows,
+          activity: await read($, activity),
+          finished: await read($, finished),
+          expandedAgent: await read($, expandedAgent),
+          worktrees: await read($, worktrees), repoError: error, root: root ?? '', home, now, m },
         {
           stop: agent => ask('stop', agent.id),
           removeWorktree: row => ask('worktree', row.path),
+          toggleAnswer: agent => act(() => update($, expandedAgent, open => (open === agent.id ? null : agent.id)).then(() => undefined))(),
+          openWorktree: row => act(() => openWorktreeDiff($, row))(),
         },
       )
       tiles = [refreshTile(async () => {

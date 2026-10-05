@@ -5,3 +5,6 @@ node_modules/
 # Local generators for docs/ (diagrams, screen examples); kept out of the repository
 .dev/
 .DS_Store
+
+# Local instructions for Claude Code; kept out of the repository
+.claude/

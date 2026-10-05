@@ -40,3 +40,16 @@ export function removeArgv(paths: readonly string[], isWindows: boolean): string
 
   return ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script)]
 }
+
+/**
+ * argv deleting `paths` with everything under them, absent or not: a session's
+ * transcript and its folder of subagent transcripts and tool output. The
+ * caller checks every path lies where it means to delete; nothing here does.
+ */
+export function removeTreeArgv(paths: readonly string[], isWindows: boolean): string[] {
+  if (!isWindows) return ['rm', '-rf', '--', ...paths]
+  // -Recurse with -Force asks nothing: a folder with children is deleted whole.
+  const script = `foreach ($p in @(${paths.map(powerShellLiteral).join(',')})) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } }`
+
+  return ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(script)]
+}

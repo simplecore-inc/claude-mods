@@ -1,13 +1,20 @@
 import type { ElementTable } from 'claude-code'
 
-import type { AgentRow, WorktreeRow } from '../../types'
+import type { AgentActivity, AgentRow, FinishedAgent, WorktreeRow } from '../../types'
 import { formatDuration } from '../shared/time'
 import { isRemovable, shortPath } from '../git'
 import type { Messages } from '../i18n'
-import { Badge, Card, Empty, IconButton, Section, theme } from '../shared/kit'
+import type { Tone } from '../shared/kit'
+import { Badge, Card, Empty, IconButton, LinkButton, Section, SubLine, theme, Toned } from '../shared/kit'
 
 export type AgentsModel = {
   agents: AgentRow[]
+  /** What each agent did last, by agent id. */
+  activity: Record<string, AgentActivity>
+  /** Agents the engine no longer lists, newest first. */
+  finished: FinishedAgent[]
+  /** The finished agent whose answer is shown in full, or null. */
+  expandedAgent: string | null
   worktrees: WorktreeRow[]
   repoError: string | null
   root: string
@@ -19,21 +26,44 @@ export type AgentsModel = {
 export type AgentsActions = {
   stop: (agent: AgentRow) => void
   removeWorktree: (row: WorktreeRow) => void
+  /** Shows or hides a finished agent's answer in full. */
+  toggleAnswer: (agent: FinishedAgent) => void
+  /** Opens the Diff tab on another worktree's changes. */
+  openWorktree: (row: WorktreeRow) => void
 }
 
-const STATUS_STYLE: Record<AgentRow['status'], { mark: string; color?: string; isDim?: boolean }> = {
-  running: { mark: '●', color: theme.ok },
-  pending: { mark: '○', color: theme.accent },
-  waiting: { mark: '◐', color: theme.warn },
+const STATUS_STYLE: Record<AgentRow['status'], { mark: string; tone?: Tone; isDim?: boolean }> = {
+  running: { mark: '●', tone: 'ok' },
+  pending: { mark: '○', tone: 'accent' },
+  waiting: { mark: '◐', tone: 'warn' },
   idle: { mark: '◐', isDim: true },
   completed: { mark: '✔', isDim: true },
-  failed: { mark: '✖', color: theme.danger },
+  failed: { mark: '✖', tone: 'danger' },
   killed: { mark: '✖', isDim: true },
 }
 
 /** How long ago `since` was: `12m`, `2h 5m`. */
 function elapsed(since: number, now: number): string {
   return formatDuration(now - since, '<1m')
+}
+
+/** Input fields that say what a tool call works on, in the order one is looked for. */
+const SUBJECT_FIELDS = ['command', 'file_path', 'notebook_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt']
+
+/**
+ * A tool call in a few words: the tool, and the first line of what it works
+ * on (`Bash: npm test`, `Edit: src/app.ts`), or the tool alone.
+ */
+export function toolSummary(tool: string, input: Record<string, unknown>): string {
+  const subject = SUBJECT_FIELDS.map(field => input[field]).find((value): value is string => typeof value === 'string' && value.trim() !== '')
+  const line = subject?.trim().split('\n')[0]?.trim()
+
+  return line ? `${tool}: ${line}` : tool
+}
+
+/** An agent's last activity as its card shows it: how long ago first, so cutting a long answer never hides it. */
+export function activityText(activity: AgentActivity, now: number, m: Messages): string {
+  return `${m.activityAgo(elapsed(activity.at, now))} · ${activity.isAnswer ? '✔ ' : ''}${activity.text}`
 }
 
 export function isStoppable(agent: AgentRow): boolean {
@@ -52,14 +82,16 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
         {model.agents.length === 0 && Empty(ui, 'agents-empty', [m.agentsEmpty])}
         {model.agents.map(agent => {
           const style = STATUS_STYLE[agent.status]
+          const lastActivity = model.activity[agent.id]
 
           return Card(
             ui,
             `agent-${agent.id}`,
             agent.status === 'running',
+            <Box flexDirection="column">
             <Box justifyContent="space-between">
               <Text wrap="truncate-end">
-                <Text color={style.color} dimColor={style.isDim === true}>{`${style.mark} `}</Text>
+                {Toned(ui, `agent-mark-${agent.id}`, `${style.mark} `, style.tone, { isDim: style.isDim === true })}
                 <Text bold={agent.status === 'running'}>{agent.label}</Text>
                 <Text dimColor>{`  ${agent.type} · ${m.agentStatus[agent.status]} · ${elapsed(agent.firstSeen, model.now)}`}</Text>
               </Text>
@@ -69,10 +101,50 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
                   {IconButton(ui, `stop-${agent.id}`, '■', theme.danger, () => actions.stop(agent))}
                 </Box>
               )}
+            </Box>
+            {lastActivity && SubLine(ui, `activity-${agent.id}`, activityText(lastActivity, model.now, m))}
             </Box>,
           )
         })}
       </Box>
+      {model.finished.length > 0 && (
+        <Box key="finished-section" flexDirection="column">
+          {Section(ui, 'finished-title', m.finishedTitle, m.finishedDetail(model.finished.length))}
+          {Card(
+            ui,
+            'finished-card',
+            false,
+            <Box flexDirection="column">
+              {model.finished.map(agent => {
+                const style = STATUS_STYLE[agent.status]
+                const isOpen = model.expandedAgent === agent.id
+                const lastActivity = model.activity[agent.id]
+
+                return (
+                  <Box key={`finished-${agent.id}`} flexDirection="column">
+                    <Box justifyContent="space-between">
+                      <Text wrap="truncate-end">
+                        {Toned(ui, `finished-mark-${agent.id}`, `${style.mark} `, style.tone, { isDim: style.isDim === true })}
+                        <Text>{agent.label}</Text>
+                        <Text dimColor>{`  ${agent.type} · ${m.activityAgo(elapsed(agent.endedAt, model.now))}`}</Text>
+                      </Text>
+                      <Box flexShrink={0} marginLeft={1}>
+                        {IconButton(ui, `answer-${agent.id}`, isOpen ? '▾' : '▸', theme.accent, () => actions.toggleAnswer(agent))}
+                      </Box>
+                    </Box>
+                    {!isOpen && lastActivity && SubLine(ui, `finished-activity-${agent.id}`, activityText(lastActivity, model.now, m))}
+                    {isOpen && (
+                      <Box key={`answer-text-${agent.id}`} paddingLeft={2} marginBottom={1}>
+                        {Toned(ui, `answer-body-${agent.id}`, agent.answer ?? m.noAnswer, undefined, { isDim: agent.answer === undefined, wrap: 'wrap' })}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
+            </Box>,
+          )}
+        </Box>
+      )}
       <Box key="worktrees-section" flexDirection="column">
         {Section(ui, 'worktrees-title', m.worktreesTitle, model.repoError ? undefined : m.worktreesCount(model.worktrees.length))}
         {model.repoError && Empty(ui, 'worktrees-error', [model.repoError])}
@@ -89,9 +161,13 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
             `worktree-${row.path}`,
             false,
             <Box justifyContent="space-between">
-              <Text wrap="truncate-end">
+              <Box flexShrink={1}>
                 <Text dimColor>{row.isMain ? '◆ ' : '◇ '}</Text>
-                <Text bold>{row.branch ?? m.detached}</Text>
+                {/* Another worktree's name opens its changes; this one's are the Diff tab's own. */}
+                {!row.isMain && row.branch
+                  ? LinkButton(ui, `worktree-open-${row.path}`, row.branch, () => actions.openWorktree(row))
+                  : <Text bold>{row.branch ?? m.detached}</Text>}
+              <Text wrap="truncate-end">
                 <Text dimColor>{`  ${shortPath(row.path, model.root, model.home)}`}</Text>
                 {facts.length > 0 && <Text dimColor>{`  ${facts.join(' · ')}`}</Text>}
                 {row.isMain && <Text> </Text>}
@@ -99,6 +175,7 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
                 {!row.isMain && row.ahead === 0 && row.changed === 0 && <Text> </Text>}
                 {!row.isMain && row.ahead === 0 && row.changed === 0 && Badge(ui, `merged-${row.path}`, m.merged, theme.ok)}
               </Text>
+              </Box>
               {isRemovable(row) && (
                 <Box flexShrink={0} marginLeft={1}>
                   {/* Removing asks in a dialog first. */}

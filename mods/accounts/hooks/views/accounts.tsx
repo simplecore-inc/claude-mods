@@ -1,9 +1,10 @@
 import type { ElementTable } from 'claude-code'
 
 import type { AccountView, LimitView, UsageView } from '../../types'
+import { moneyText } from '../anthropic'
 import { bar, displayWidth, formatDuration, isSameReset, packRows, resetText } from '../format'
 import type { Locale, Messages } from '../i18n'
-import { Badge, Card, CARD_CHROME, CELL_GAP, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton } from '../shared/kit'
+import { Badge, Card, CARD_CHROME, CELL_GAP, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton, Toned } from '../shared/kit'
 
 export const STALE_MARK = '◷'
 
@@ -77,13 +78,11 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
           <Box flexDirection="column">
             <Box justifyContent="space-between">
               <Text>
-                <Text color={isLive ? theme.accent : undefined} dimColor={!isLive}>
-                  {isLive ? '● ' : '○ '}
-                </Text>
+                {Toned(ui, `live-${one.uuid}`, isLive ? '● ' : '○ ', isLive ? 'accent' : undefined, { isDim: !isLive })}
                 <Text bold={isLive}>{one.email}</Text>
                 {isLive && <Text> </Text>}
                 {isLive && Badge(ui, `active-${one.uuid}`, m.active)}
-                {reading?.isStale && <Text color={theme.stale} dimColor>{` ${STALE_MARK}`}</Text>}
+                {reading?.isStale && Toned(ui, `stale-${one.uuid}`, ` ${STALE_MARK}`, 'stale', { isDim: true })}
                 {updated !== '' && <Text dimColor>{`  ${updated}`}</Text>}
               </Text>
               {!isLive && (
@@ -108,7 +107,16 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
                 </Box>
               ))}
               {!reading && <Text dimColor>{m.loading}</Text>}
-              {reading?.error && <Text color={theme.danger}>{reading.error}</Text>}
+              {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger')}
+              {/* Only what the usage endpoint reported for this account, as it reported it. */}
+              {reading?.spend &&
+                Toned(
+                  ui,
+                  `spend-${one.uuid}`,
+                  m.spendLine(moneyText(reading.spend.used), reading.spend.limit ? moneyText(reading.spend.limit) : undefined),
+                  undefined,
+                  { isDim: true },
+                )}
             </Box>
           </Box>,
         )
