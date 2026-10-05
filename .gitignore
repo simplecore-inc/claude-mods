@@ -8,3 +8,6 @@ node_modules/
 
 # Local instructions for Claude Code; kept out of the repository
 .claude/
+
+# This checkout's toolbox tools and their logs; kept out of the repository
+.toolbox/
