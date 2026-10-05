@@ -9,7 +9,7 @@ import { checkpointRef, clipDiff, finishAgents, keptCheckpoints, mergeCheckpoint
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
 import { isBesideOtherPanes } from './shared/panes'
-import { ChoiceDialog, Dialog, Header, InputDialog, paneTitle, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { ChoiceDialog, CodeDialog, Dialog, Header, InputDialog, paneTitle, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
 import { doneMarks, nextSeq, notesContext, numbered } from './notes'
 import type { DialogLine, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
@@ -56,6 +56,7 @@ const memoryQuery = atom({ plugin: 'sc-workspace', key: 'memoryQuery' } as const
 const memoryScope = atom({ plugin: 'sc-workspace', key: 'memoryScope' } as const, 'all')
 const memoryOpen = atom({ plugin: 'sc-workspace', key: 'memoryOpen' } as const, null)
 const memoryPage = atom({ plugin: 'sc-workspace', key: 'memoryPage' } as const, 0)
+const diffPage = atom({ plugin: 'sc-workspace', key: 'diffPage' } as const, 0)
 /** Where the organisation's policy memory sits, on macOS, Linux and WSL, and Windows: whichever exists is read. */
 const MANAGED_MEMORY = ['/Library/Application Support/ClaudeCode/CLAUDE.md', '/etc/claude-code/CLAUDE.md', 'C:/Program Files/ClaudeCode/CLAUDE.md']
 /** How many hops of `@path` imports Claude Code follows. */
@@ -104,7 +105,11 @@ const CHECKPOINTS_KEPT = 50
 /** Checkpoints whose changes since are counted and shown. */
 const CHECKPOINTS_SHOWN = 12
 /** Lines of one file's diff shown in the Diff tab. */
-const DIFF_LINES = 400
+const DIFF_LINES = 5_000
+/** Characters of a file's diff kept for its dialog, which shows it a page at a time. */
+const DIFF_DIALOG_CHARS = 400_000
+/** Lines of a diff on one page of its dialog: a fixed count, so the dialog keeps its height. */
+const DIFF_PAGE_LINES = 24
 
 let locale: Locale = 'en'
 let m: Messages = messagesFor(locale)
@@ -419,7 +424,7 @@ async function refreshDiff($: EngineInterface, base?: DiffPoint, target?: DiffPo
   const openPath = isSameEnds ? current?.selected?.path : undefined
   let selected: DiffView['selected']
   if (openPath && files.some(file => file.path === openPath)) {
-    selected = { path: openPath, ...clipDiff(await fileDiff(run, root, from.commit, tree, openPath), DIFF_LINES) }
+    selected = { path: openPath, ...clipDiff(await fileDiff(run, root, from.commit, tree, openPath), DIFF_LINES, DIFF_DIALOG_CHARS) }
   }
   const isSame =
     current !== null &&
@@ -430,18 +435,17 @@ async function refreshDiff($: EngineInterface, base?: DiffPoint, target?: DiffPo
   if (!isSame) await update($, diff, () => ({ base: from, target: to, files, selected, at: Date.now() }))
 }
 
+/** Opens a file's diff in its dialog, on its first page: however long the file list, the diff is never below it. */
 async function openFile($: EngineInterface, path: string): Promise<void> {
   const current = await read($, diff)
   if (!root || !current) return
-  if (current.selected?.path === path) {
-    await update($, diff, view => (view ? { ...view, selected: undefined } : view))
-
-    return
-  }
   const run = runner($)
   const tree = current.worktree ? await worktreeTree($, current.worktree.path) : await targetTree($, current.target)
-  const selected = { path, ...clipDiff(await fileDiff(run, root, current.base.commit, tree, path), DIFF_LINES) }
+  const selected = { path, ...clipDiff(await fileDiff(run, root, current.base.commit, tree, path), DIFF_LINES, DIFF_DIALOG_CHARS) }
   await update($, diff, view => (view ? { ...view, selected } : view))
+  await update($, diffPage, () => 0)
+  await update($, dialog, () => ({ kind: 'diff', ref: path }))
+  await $.ui.open({ id: PANE, title: TAB_LABEL, focus: true, closeOnEscape: true, rows: READER_PANE_ROWS })
 }
 
 // ── memory ────────────────────────────────────────────────────────────────
@@ -745,7 +749,7 @@ async function isPaneOpen($: EngineInterface): Promise<boolean> {
  * to stop, worktree to remove or file to put back (`file`, by path); or, for
  * `base` and `target`, which checkpoints the Diff tab compares (`ref` unused).
  */
-type Dialog = { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base' | 'target' | 'file' | 'name' | 'memoryScope' | 'memoryRead'; ref: string }
+type Dialog = { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base' | 'target' | 'file' | 'name' | 'memoryScope' | 'memoryRead' | 'diff'; ref: string }
 
 /** The checkpoints the Diff tab's base is picked from: the newest shown, and the session's own start. */
 async function baseCandidates($: EngineInterface) {
@@ -771,7 +775,7 @@ async function dialogSpec(
   $: EngineInterface,
   asked: Dialog,
 ): Promise<{ title: string; lines: DialogLine[]; confirm: string; run: () => Promise<string | void> } | null> {
-  if (asked.kind === 'base' || asked.kind === 'target' || asked.kind === 'name' || asked.kind === 'memoryScope' || asked.kind === 'memoryRead') return null
+  if (asked.kind === 'base' || asked.kind === 'target' || asked.kind === 'name' || asked.kind === 'memoryScope' || asked.kind === 'memoryRead' || asked.kind === 'diff') return null
   const now = await $.clock.now()
   if (asked.kind === 'restore') {
     const row = (await read($, checkpoints)).find(one => one.ref === asked.ref)
@@ -1117,6 +1121,48 @@ export const register: Register = (on, options) => {
         )
       }
     }
+    if (asked?.kind === 'diff') {
+      const view = await read($, diff)
+      const files = view?.files ?? []
+      const at = files.findIndex(one => one.path === asked.ref)
+      const file = files[at]
+      const selected = view?.selected?.path === asked.ref ? view.selected : undefined
+      if (view && file && selected) {
+        const lines = selected.text === '' ? [] : selected.text.split('\n')
+        const count = Math.max(1, Math.ceil(lines.length / DIFF_PAGE_LINES))
+        const index = Math.min(Math.max(0, await read($, diffPage)), count - 1)
+        const turn = (step: number) => () => {
+          void update($, diffPage, () => index + step).catch((error: unknown) => debug($, error))
+        }
+        const open = (path: string) => () => void openFile($, path).catch((error: unknown) => $.ui.toast(message(error)))
+        const previousFile = files[at - 1]
+        const nextFile = files[at + 1]
+        const counts = file.added === null ? m.binary : `+${file.added} −${file.removed ?? 0}`
+        const omitted = selected.omitted > 0 && index === count - 1 ? ` · ${m.linesOmitted(selected.omitted)}` : ''
+
+        return CodeDialog(
+          ui,
+          bodyColumns,
+          header,
+          file.path,
+          `${counts} · ${m.diffDialogSince(view.base.label)}${omitted}`,
+          { source: lines.slice(index * DIFF_PAGE_LINES, (index + 1) * DIFF_PAGE_LINES).join('\n'), format: 'diff', path: file.path, empty: m.binary },
+          { index, count, label: m.readerPage(index + 1, count) },
+          {
+            previous: { label: m.readerPrevious, onPress: turn(-1) },
+            next: { label: m.readerNext, onPress: turn(1) },
+            extra: [
+              ...(previousFile ? [{ key: 'diff-previous-file', label: m.diffPreviousFile, onPress: open(previousFile.path) }] : []),
+              ...(nextFile ? [{ key: 'diff-next-file', label: m.diffNextFile, onPress: open(nextFile.path) }] : []),
+              // Only the working tree can be written back: a file compared between two checkpoints, or another worktree's, has no restore.
+              ...(!view.target && !view.worktree ? [{ key: 'diff-file-restore', label: m.diffRestoreFile, onPress: () => void update($, dialog, () => ({ kind: 'file', ref: file.path })).catch((error: unknown) => debug($, error)) }] : []),
+            ],
+            close: { label: m.closeButton, onPress: () => void dismiss().catch((error: unknown) => debug($, error)) },
+          },
+          await read($, focused),
+        )
+      }
+    }
     if (asked?.kind === 'memoryRead') {
       const file = (await read($, memory))?.find(one => one.path === asked.ref)
       const text = memoryTexts.get(asked.ref)
@@ -1398,15 +1444,10 @@ export const register: Register = (on, options) => {
         },
         {
           select: path => act(() => openFile($, path))(),
-          closeFile: () =>
-            act(async () => {
-              await update($, diff, view => (view ? { ...view, selected: undefined } : view))
-            })(),
           // The dialog shows what changed since each checkpoint, counted here when it opens:
           // nothing else counts them outside the Checkpoints tab.
           chooseBase: () => ask('base', '', () => refreshSince($)),
           chooseTarget: () => ask('target', ''),
-          restoreFile: path => ask('file', path),
           closeWorktree: () =>
             act(async () => {
               await update($, diff, () => null)

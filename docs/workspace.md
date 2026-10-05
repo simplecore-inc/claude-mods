@@ -68,9 +68,11 @@ Beside the base, `up to Working tree ▾` picks the other end: the working tree 
 
 ![The dialog that picks what the changes are compared with](images/workspace-base.svg)
 
-Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts. Pressing a file shows its diff below. A long diff shows its first 9,500 characters, and a line over 400 characters is cut with `…`; the rest is counted below it.
+Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts, or `binary`; every row is one line. Pressing a file opens its diff in a dialog, 24 lines a page, however long the list: **Previous page** and **Next page** turn it, and **◂ Previous file** and **Next file ▸** move along the list without closing it. A line over 400 characters is cut with `…`, and a diff past 5,000 lines says how many were left out on its last page.
 
-- `↺` on the open file puts that file alone back as it was at the base, after a dialog that says what it undoes. A file made since is deleted, and a rename is undone. A "Before restore" checkpoint is taken first, so it can be undone. Comparing two checkpoints, there is no `↺`: only the working tree is written back.
+![A file's diff in its dialog](images/workspace-diff-file.svg)
+
+- **↺ Restore** in the dialog puts that file alone back as it was at the base, after a dialog that says what it undoes. A file made since is deleted, and a rename is undone. A "Before restore" checkpoint is taken first, so it can be undone. Comparing two checkpoints, or another worktree's changes, there is no **↺ Restore**: only this working tree is written back.
 - **Draft commit message** puts a request in the prompt naming the range and every changed file with its counts. Claude reads the diffs, follows the repository's commit conventions and shows a message without committing. Nothing is sent until you press Enter.
 
 ### Memory

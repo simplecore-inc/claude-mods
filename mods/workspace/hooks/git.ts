@@ -141,13 +141,13 @@ export const DIFF_CHARS = 9_500
  * thousands), saying how many lines were left out. The trailing newline goes:
  * a diff renderer reads the empty line after it as a malformed hunk line.
  */
-export function clipDiff(text: string, limit: number): { text: string; omitted: number } {
+export function clipDiff(text: string, limit: number, chars = DIFF_CHARS): { text: string; omitted: number } {
   const lines = text.replace(/\n+$/, '').split('\n')
   const kept: string[] = []
   let size = 0
   for (const line of lines) {
     const shown = line.length > DIFF_LINE_CHARS ? `${line.slice(0, DIFF_LINE_CHARS)}…` : line
-    if (kept.length === limit || size + shown.length + 1 > DIFF_CHARS) break
+    if (kept.length === limit || size + shown.length + 1 > chars) break
     kept.push(shown)
     size += shown.length + 1
   }

@@ -17,14 +17,12 @@ export type DiffModel = {
 }
 
 export type DiffActions = {
+  /** Opens a file's diff in its dialog. */
   select: (path: string) => void
-  closeFile: () => void
   /** Opens the dialog that picks the checkpoint the changes are compared with. */
   chooseBase: () => void
   /** Opens the dialog that picks what the changes are compared up to: the working tree or a later checkpoint. */
   chooseTarget: () => void
-  /** Asks to put the open file back as it was at the base. */
-  restoreFile: (path: string) => void
   /** Leaves another worktree's changes for this one's. */
   closeWorktree: () => void
 }
@@ -139,13 +137,15 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
   const { m, diff } = model
   if (model.repoError) return Empty(ui, 'diff-error', [model.repoError, m.checkpointsNeedGit])
   if (!diff) return Empty(ui, 'diff-loading', [m.loading])
-  const selected = diff.selected
   const largest = Math.max(0, ...diff.files.map(file => (file.added ?? 0) + (file.removed ?? 0)))
   const added = diff.files.reduce((sum, file) => sum + (file.added ?? 0), 0)
   const removed = diff.files.reduce((sum, file) => sum + (file.removed ?? 0), 0)
-  // The counts take one width for every file, so every bar starts in the same column.
-  const addedWidth = Math.max(...diff.files.map(file => `+${file.added ?? 0}`.length))
+  // The counts take one width for every file, so every bar starts in the same column; a binary
+  // file's word takes that width too, the added figures padded to it, so no row runs over and wraps.
   const removedWidth = Math.max(...diff.files.map(file => `−${file.removed ?? 0}`.length))
+  const figures = Math.max(...diff.files.map(file => `+${file.added ?? 0}`.length))
+  const binaryWidth = diff.files.some(file => file.added === null) ? 2 + displayWidth(m.binary) : 0
+  const addedWidth = Math.max(figures, binaryWidth - 3 - removedWidth)
   const countsWidth = 2 + addedWidth + 1 + removedWidth
   const pathRoom = Math.max(16, model.bodyColumns - 4 - 4 - CHANGE_BAR - countsWidth)
   // One column for every name, so the folders start together.
@@ -185,7 +185,6 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
             {diff.files.map(file => {
               const mark = STATUS_MARK[file.status]
               const cells = changeCells(file, largest)
-              const isSelected = diff.selected?.path === file.path
               const { name, folder } = splitPath(file.path, nameWidth, pathRoom)
 
               return (
@@ -195,7 +194,7 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
                     {/* The file's name is the button. Its folder is drawn with `›`, not `/`:
                         a terminal turns a path into a link of its own and takes the click. */}
                     {/* The name at full strength, the folder dim: the two never read as one. */}
-                    {LinkButton(ui, `file-open-${file.path}`, `${isSelected ? '▾' : '▸'} ${padCells(name, nameWidth)}`, () => actions.select(file.path))}
+                    {LinkButton(ui, `file-open-${file.path}`, `▸ ${padCells(name, nameWidth)}`, () => actions.select(file.path))}
                     {folder !== '' && (
                       <Text dimColor wrap="truncate-end">
                         {folder}
@@ -216,28 +215,6 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
                 </Box>
               )
             })}
-          </Box>,
-        )}
-      {selected &&
-        Card(
-          ui,
-          'diff-file',
-          true,
-          <Box flexDirection="column">
-            <Box justifyContent="space-between">
-              <Text bold>{selected.path}</Text>
-              <Box gap={1} flexShrink={0}>
-                {/* Only the working tree can be written back: a file compared between two checkpoints has no restore. */}
-                {!diff.target && !diff.worktree && IconButton(ui, 'diff-file-restore', '↺', theme.danger, () => actions.restoreFile(selected.path))}
-                {IconButton(ui, 'diff-file-close', '✕', theme.accent, actions.closeFile)}
-              </Box>
-            </Box>
-            {selected.text.trim() === '' ? (
-              <Text dimColor>{m.binary}</Text>
-            ) : (
-              <ui.Code source={selected.text} format="diff" path={selected.path} />
-            )}
-            {selected.omitted > 0 && <Text dimColor>{m.linesOmitted(selected.omitted)}</Text>}
           </Box>,
         )}
     </Box>

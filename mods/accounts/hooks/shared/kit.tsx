@@ -930,6 +930,53 @@ export function LogDialog(
   )
 }
 
+/**
+ * A dialog that shows one page of code, a diff or a file: a dim line saying
+ * what it is, the page's lines numbered from where the page starts, and tiles
+ * to turn pages, then the caller's own (another file, an action on this one),
+ * then Close. The page is cut by the caller to a fixed number of lines, so the
+ * dialog keeps its height from page to page.
+ */
+export function CodeDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: HeaderInfo,
+  title: string,
+  subtitle: string,
+  code: { source: string; format?: 'diff'; path?: string; empty: string },
+  page: { index: number; count: number; label: string },
+  actions: { previous: { label: string; onPress: () => void }; next: { label: string; onPress: () => void }; extra?: Tile[]; close: { label: string; onPress: () => void } },
+  focused: string | null = null,
+) {
+  const { Box, Code, Text } = ui
+  const tiles: Tile[] = [
+    ...(page.index > 0 ? [{ key: 'code-previous', label: actions.previous.label, onPress: actions.previous.onPress }] : []),
+    ...(page.index < page.count - 1 ? [{ key: 'code-next', label: actions.next.label, isMain: true, onPress: actions.next.onPress }] : []),
+    ...(actions.extra ?? []),
+    { key: 'dialog-cancel', label: actions.close.label, isDismiss: true, onPress: actions.close.onPress },
+  ]
+
+  return DialogFrame(
+    ui,
+    dialogHeader(header, actions.close.onPress),
+    theme.accent,
+    title,
+    <Box key="code-body" flexDirection="column" marginTop={1}>
+      <Text dimColor wrap="truncate-end">
+        {page.count > 1 ? `${subtitle} · ${page.label}` : subtitle}
+      </Text>
+      <Box key="code-lines" flexDirection="column" marginTop={1}>
+        {code.source.trim() === '' ? (
+          Toned(ui, 'code-empty', code.empty, undefined, { isDim: true })
+        ) : (
+          <Code key="code-source" source={code.source} {...(code.format ? { format: code.format } : {})} {...(code.path ? { path: code.path } : {})} />
+        )}
+      </Box>
+    </Box>,
+    Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), tiles, { focused }),
+  )
+}
+
 /** One choice of a choice dialog: what pressing it picks, and a dim detail beside it. */
 export type Choice = { key: string; label: string; detail?: string; isCurrent?: boolean; onPress: () => void }
 

@@ -1,7 +1,7 @@
 {
   "name": "sc-toolbox",
   "displayName": "SimpleCORE Toolbox",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "license": "MIT",
   "description": "A toolbox pane for Claude Code: run, stop and watch the project's build tasks, scripts, Claude commands and prompts from one list",
   "author": {

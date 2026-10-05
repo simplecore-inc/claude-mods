@@ -164,7 +164,7 @@ declare module 'claude-code' {
       /** `$.clock.now()` of the last agents check while one is active: redraws their elapsed times. */
       clock: number
       /** What the dialog asks: a confirmation, or one end of the Diff tab's comparison; null with no dialog open. */
-      dialog: { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base' | 'target' | 'file' | 'name' | 'memoryScope' | 'memoryRead'; ref: string } | null
+      dialog: { kind: 'restore' | 'note' | 'stop' | 'worktree' | 'base' | 'target' | 'file' | 'name' | 'memoryScope' | 'memoryRead' | 'diff'; ref: string } | null
       /** What each agent did last, by agent id. */
       activity: Record<string, AgentActivity>
       /** Each agent's last answer in full, by agent id. */
@@ -177,6 +177,8 @@ declare module 'claude-code' {
       memoryScope: 'all' | MemoryScope
       /** The path of the memory file whose outline is open, or null. */
       memoryOpen: string | null
+      /** The page of the open file's diff the diff dialog shows, from 0. */
+      diffPage: number
       /** The page of the memory file the reader shows, from 0. */
       memoryPage: number
       /** Agents the engine no longer lists, newest first. */

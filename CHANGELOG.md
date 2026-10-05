@@ -2,6 +2,13 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.5.1 (2026-10-05)
+
+### Workspace (`sc-workspace`)
+
+- Diff: pressing a file opens its diff in a dialog, a page of 24 lines at a time, however long the list of files; **◂ Previous file** and **Next file ▸** move along the list without closing it, and **↺ Restore** puts the file back from there.
+- Diff: a binary file's row stays one line when every count is shorter than the word `binary`.
+
 ## 0.5.0 (2026-10-05)
 
 ### All panes

@@ -55,6 +55,7 @@ function seedState(on: On, extra: Record<string, unknown>): void {
     memoryScope: 'all',
     memoryOpen: null,
     memoryPage: 0,
+    diffPage: 0,
     ...extra,
   }
   // A hook standing for the engine answers { value: <the event's result> }.
@@ -201,17 +202,17 @@ test('the diff tab: files with their marks, and the open file\'s diff', async ($
   seedState(on, { tab: 'diff' })
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
-    // The file's name is the button, its glyph down when open; the folder is joined by ›, never /,
+    // The file's name is the button; the folder is joined by ›, never /,
     // so nothing on the row looks like a path a terminal would turn into a link.
     // Names share one column (here 8 cells, logo.png), so the folders start together.
-    expect((await ui.find({ key: 'file-open-src/app.ts' }))?.text).toBe('▾ app.ts  ')
+    expect((await ui.find({ key: 'file-open-src/app.ts' }))?.text).toBe('▸ app.ts  ')
     expect((await ui.find({ key: 'file-open-docs/new.md' }))?.text).toBe('▸ new.md  ')
     // The name is drawn at full strength; only the folder is dim.
     expect((await ui.find({ key: 'file-open-docs/new.md' }))?.props.dimColor).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'src' })).toBeDefined()
     expect((await ui.find({ key: 'diff-files' }))?.text).not.toMatch(/\w\/\w/)
-    // Code takes no key; the open file's diff is the one Code element.
-    expect(await ui.find({ type: 'Code' })).toBeDefined()
+    // A file's diff opens in its dialog, never under the list, however long the list.
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /binary/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '+28' })).toBeDefined()
     // Every file's counts take the same width, so the bars line up.
@@ -570,6 +571,7 @@ test('a diff of one huge line (an SVG), or of many ordinary lines, still draws: 
       selected: { path: 'x.svg', ...clipDiff(huge, 400) },
       at: NOW,
     },
+    dialog: { kind: 'diff', ref: 'x.svg' },
   })
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Code' })).toBeDefined()
@@ -586,22 +588,30 @@ test('a long diff of ordinary lines draws, cut to what the engine takes', async 
       selected: { path: 'r.ts', ...clipDiff(long, 400) },
       at: NOW,
     },
+    dialog: { kind: 'diff', ref: 'r.ts' },
   })
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Code' })).toBeDefined()
+  // A page at a time, 24 lines each: the first one shown, Next offered.
+  expect(await ui.find({ type: 'Text', text: /page 1 of \d+$/ })).toBeDefined()
+  expect(await ui.find({ key: 'code-next' })).toBeDefined()
+  expect(await ui.find({ key: 'code-previous' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('the open file has a restore button that asks first; comparing two checkpoints has none', async ($, on) => {
-  seedState(on, { tab: 'diff' })
+test('the diff dialog has a restore button that asks first, and moves between the files', async ($, on) => {
+  seedState(on, { tab: 'diff', dialog: { kind: 'diff', ref: 'src/app.ts' } })
   const written: unknown[] = []
   on('state.set', ($, e) => {
     if (e.key === 'dialog') written.push(e.value)
     return { value: { isSet: true, version: 2 } as never }
   })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ key: 'diff-target' })).toBeDefined()
-  expect((await ui.find({ key: 'diff-target' }))?.text).toBe('Working tree ▾')
+  expect(await ui.find({ type: 'Text', text: 'src/app.ts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '+8 −2 · since Session start' })).toBeDefined()
+  // The first file has a next one and no previous one.
+  expect(await ui.find({ key: 'diff-next-file' })).toBeDefined()
+  expect(await ui.find({ key: 'diff-previous-file' })).toBeUndefined()
   await ui.press({ key: 'diff-file-restore' })
   expect(written).toContainEqual({ kind: 'file', ref: 'src/app.ts' })
   await ui.unmount()
@@ -617,10 +627,11 @@ test('between two checkpoints the open file has no restore button', async ($, on
       selected: { path: 'src/app.ts', text: '@@ -1 +1 @@\n-old\n+new', omitted: 0 },
       at: NOW,
     },
+    dialog: { kind: 'diff', ref: 'src/app.ts' },
   })
   const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Code' })).toBeDefined()
   expect(await ui.find({ key: 'diff-file-restore' })).toBeUndefined()
-  expect((await ui.find({ key: 'diff-target' }))?.text).toMatch(/Fix the login bug ▾$/)
   await ui.unmount()
 })
 
@@ -815,5 +826,25 @@ test('on mobile, with no field, the Memory tab still lists the files', async ($,
   const ui = await mountPane($, 'mobile')
   expect(await ui.find({ key: 'memory-search-input' })).toBeUndefined()
   expect(await ui.find({ key: 'memory-open-/repo/CLAUDE.md' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a binary file keeps its row to one line when every count is shorter than its word', async ($, on) => {
+  seedState(on, {
+    tab: 'diff',
+    diff: {
+      base: { commit: 'c1', label: 'Session start', at: NOW - 3_600_000, isSessionStart: true },
+      files: [
+        { path: 'src/a.ts', status: 'modified', added: 4, removed: 4 },
+        { path: 'logo.png', status: 'modified', added: null, removed: null },
+      ],
+      at: NOW,
+    },
+  })
+  const ui = await mountPane($, 'terminal')
+  const counts = (await ui.findAll({ type: 'Text', text: /^ {2}\s*\+\d+ \s*−\d+$/ })).map(found => (found.text ?? '').length)
+  const binary = (await ui.findAll({ type: 'Text', text: /^ {2}binary\s*$/ })).map(found => (found.text ?? '').length)
+  // One width for both: the counts are padded to the word, never the word run past them.
+  expect(counts).toEqual(binary)
   await ui.unmount()
 })
