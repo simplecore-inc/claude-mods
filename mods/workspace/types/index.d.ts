@@ -143,8 +143,11 @@ export type DiffView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    /** What this plugin reads of the accounts mod's state. */
+    /** What this plugin reads of the accounts mod's and the toolbox's state. */
     'sc-accounts': {
+      paneOpen: boolean
+    }
+    'sc-toolbox': {
       paneOpen: boolean
     }
     'sc-workspace': {

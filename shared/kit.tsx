@@ -52,23 +52,58 @@ const TILE_GAP = 1
 export type Tile = { key: string; label: string; isMain?: boolean; isDismiss?: boolean; isFocused?: boolean; onPress: () => void }
 export type TabSpec = { key: string; label: string; badge?: string; hotkey: string }
 
-/**
- * What heads a pane: its name, its release, and whether the engine draws its
- * tab row right above (another pane is open beside it), which the header
- * keeps a row apart from.
- */
-export type HeaderInfo = { brand: string; release: string | undefined; isUnderTabs: boolean }
+/** A pane's name in its header: the product's short mark, then the mod's name, as `[SC] Workspace`. */
+export function paneTitle(mod: string): string {
+  return `[SC] ${mod}`
+}
 
+/**
+ * What heads a pane: its name, its release, whether the engine draws its tab
+ * row right above (another pane is open beside it), which the header keeps a
+ * row apart from, and the way out: `exit` closes the pane, and a dialog puts
+ * its own Cancel there as `backLabel`. `columns` is the width it has.
+ */
+export type HeaderInfo = {
+  brand: string
+  release: string | undefined
+  isUnderTabs: boolean
+  columns?: number
+  exit?: { label: string; onPress: () => void }
+  backLabel?: string
+}
+
+/**
+ * A pane's first row: its name at the left and the way out at the right, a
+ * filled button that is the first thing scrolled into view however short the
+ * terminal is. The release sits before it while the row has room for it.
+ */
 export function Header(ui: ElementTable, header: HeaderInfo) {
-  const { Box, Text } = ui
-  const { brand, release } = header
+  const { Box, Button, Text } = ui
+  const { brand, release, exit } = header
+  const exitWidth = exit ? displayWidth(exit.label) + 2 : 0
+  const room = (header.columns ?? 80) - displayWidth(brand) - exitWidth - 2
+  const isReleaseShown = release !== undefined && displayWidth(release) <= room
 
   return (
     <Box key="header" justifyContent="space-between" marginTop={header.isUnderTabs ? 1 : 0}>
-      <Text bold>{brand}</Text>
-      {release && <Text dimColor>{release}</Text>}
+      <Text bold wrap="truncate-end">
+        {brand}
+      </Text>
+      <Box gap={2} flexShrink={0}>
+        {isReleaseShown && <Text dimColor>{release}</Text>}
+        {exit && (
+          <Box key="header-exit-ground" paddingX={1} flexShrink={0} backgroundColor={theme.tile} hover={{ backgroundColor: theme.tileHover }}>
+            <Button key="close" label={exit.label} plain role="dismiss" onPress={exit.onPress} />
+          </Box>
+        )}
+      </Box>
     </Box>
   )
+}
+
+/** The header a dialog draws: the pane's, its way out being the dialog's own Cancel. */
+export function dialogHeader(header: HeaderInfo, cancel: () => void): HeaderInfo {
+  return { ...header, exit: { label: header.backLabel ?? '←', onPress: cancel } }
 }
 
 /** The tab bar: the selected tab filled, the others dim; a digit presses each. */
@@ -77,7 +112,8 @@ export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSele
 
   return (
     // A tab never wraps inside: on a narrow pane the next tab moves to a new row.
-    <Box key="tabs" gap={1} marginTop={1} flexWrap="wrap">
+    // Right under the header: on a short terminal every row the chrome keeps is a row of the tab's body.
+    <Box key="tabs" columnGap={1} flexWrap="wrap">
       {tabs.map(tab => {
         const isActive = tab.key === active
 
@@ -367,7 +403,8 @@ export function BarChart(ui: ElementTable, key: string, bars: { label: string; v
 
 /**
  * A ranking, one row each: the name, a dim detail after it, and the value at
- * the right edge; the name is cut to what the value and detail leave.
+ * the right edge. The name keeps its whole width up to half the row; the
+ * detail takes what is left and is cut first.
  */
 export function RankList(ui: ElementTable, key: string, rows: { name: string; detail: string; value: string; onPress?: () => void }[], width: number) {
   const { Box, Text } = ui
@@ -376,7 +413,9 @@ export function RankList(ui: ElementTable, key: string, rows: { name: string; de
   return (
     <Box key={key} flexDirection="column">
       {rows.map((row, index) => {
-        const room = Math.max(6, width - valueWidth - displayWidth(row.detail) - 4)
+        const free = Math.max(12, width - valueWidth - 4)
+        const room = Math.min(displayWidth(row.name), Math.max(Math.floor(free / 2), free - displayWidth(row.detail)))
+        const detail = truncate(row.detail, Math.max(0, free - room))
 
         // Rows are keyed by place: two rows may share a name (one line found in two files).
         return (
@@ -386,13 +425,13 @@ export function RankList(ui: ElementTable, key: string, rows: { name: string; de
               <Box gap={2} flexShrink={1}>
                 {LinkButton(ui, `${key}-${index}-open`, truncate(row.name, room), row.onPress)}
                 <Text dimColor wrap="truncate-end">
-                  {row.detail}
+                  {detail}
                 </Text>
               </Box>
             ) : (
               <Text wrap="truncate-end">
                 <Text>{truncate(row.name, room)}</Text>
-                <Text dimColor>{`  ${row.detail}`}</Text>
+                <Text dimColor>{detail === '' ? '' : `  ${detail}`}</Text>
               </Text>
             )}
             <Box flexShrink={0} marginLeft={1}>
@@ -465,6 +504,7 @@ const TILE_PADDING = 2
  */
 export function Tiles(ui: ElementTable, bodyColumns: number, tiles: Tile[], outline?: { focused: string | null }) {
   const { Box, Button } = ui
+  if (tiles.length === 0) return null
   const needed = Math.max(...tiles.map(tile => displayWidth(tile.label))) + TILE_PADDING * 2
   const perRow = Math.max(1, Math.min(tiles.length, Math.floor((bodyColumns + TILE_GAP) / (needed + TILE_GAP))))
   const width = Math.max(needed, Math.floor((bodyColumns - TILE_GAP * (perRow - 1)) / perRow))
@@ -506,6 +546,82 @@ export function Tiles(ui: ElementTable, bodyColumns: number, tiles: Tile[], outl
   )
 }
 
+/** A glyph button on a status tile: what it does and the tone of its ground. */
+export type TileAction = { key: string; glyph: string; tone: string; onPress: () => void }
+
+/**
+ * A tile that says how its thing stands, in two lines: an icon and a title,
+ * with glyph buttons at the right of the same line, then a status line; both
+ * lines press the tile, across its whole width. `ground` fills the tile with the state's
+ * dark colour (`ok` running, `warn` waiting, `danger` failed); `isLit` false
+ * drops it to the neutral fill, so a caller alternating it makes the tile blink.
+ */
+export type StatusTile = {
+  key: string
+  icon: string
+  iconTone?: Tone
+  title: string
+  status: string
+  ground?: 'ok' | 'warn' | 'danger' | 'accent'
+  isLit?: boolean
+  actions?: TileAction[]
+  onPress: () => void
+}
+
+const STATUS_GROUND: Record<NonNullable<StatusTile['ground']>, string> = {
+  ok: theme.glyphOk,
+  warn: theme.glyphWarn,
+  danger: theme.glyphDanger,
+  accent: theme.glyphAccent,
+}
+
+/**
+ * Status tiles, `columns` to a row (two by default, one where the pane is
+ * too narrow for two of `minWidth` cells), every tile the same width and its
+ * text left-aligned and cut to one line each.
+ */
+export function StatusTiles(ui: ElementTable, bodyColumns: number, tiles: StatusTile[], options: { columns?: number; minWidth?: number } = {}) {
+  const { Box, Button } = ui
+  const wanted = options.columns ?? 2
+  const perRow = Math.max(1, Math.min(wanted, Math.floor((bodyColumns + TILE_GAP) / ((options.minWidth ?? 28) + TILE_GAP))))
+  const width = Math.floor((bodyColumns - TILE_GAP * (perRow - 1)) / perRow)
+  const rows: StatusTile[][] = []
+  for (let start = 0; start < tiles.length; start += perRow) rows.push(tiles.slice(start, start + perRow))
+
+  return (
+    <Box key="status-tiles" flexDirection="column" rowGap={1}>
+      {rows.map((row, index) => (
+        <Box key={`status-row-${index}`} gap={TILE_GAP}>
+          {row.map(tile => {
+            const buttons = tile.actions ?? []
+            // The tile keeps a cell of padding each side; each glyph button is one cell with a cell before it.
+            const text = Math.max(4, width - 2)
+            const title = Math.max(1, text - displayWidth(tile.icon) - 1 - buttons.length * 2)
+            const ground = tile.ground && tile.isLit !== false ? STATUS_GROUND[tile.ground] : theme.tile
+
+            return (
+              <Box key={`status-${tile.key}`} width={width} flexShrink={0} paddingX={1} flexDirection="column" backgroundColor={ground} hover={{ backgroundColor: theme.tileHover }}>
+                <Box justifyContent="space-between">
+                  <Box gap={1} flexShrink={1}>
+                    {Toned(ui, `status-icon-${tile.key}`, tile.icon, tile.iconTone, { isBold: true })}
+                    <Button key={tile.key} label={padCells(truncate(tile.title.replace(/\s+/g, ' '), title), title)} plain onPress={tile.onPress} />
+                  </Box>
+                  {buttons.length > 0 && (
+                    <Box gap={1} flexShrink={0}>
+                      {buttons.map(action => IconButton(ui, action.key, action.glyph, action.tone, action.onPress))}
+                    </Box>
+                  )}
+                </Box>
+                <Button key={`${tile.key}-status`} label={padCells(truncate(tile.status, text), text)} plain onPress={tile.onPress} />
+              </Box>
+            )
+          })}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 /** One line of a dialog: its text, and a tone for the line that matters most. */
 export type DialogLine = { text: string; tone?: 'danger' | 'ok' | 'muted' }
 
@@ -526,7 +642,7 @@ export function DialogFrame(
   return (
     <Box key="dialog-pane" flexDirection="column">
       {Header(ui, header)}
-      <Box key="dialog" flexDirection="column" marginTop={1} borderStyle="round" borderColor={borderColor} paddingX={1}>
+      <Box key="dialog" flexDirection="column" borderStyle="round" borderColor={borderColor} paddingX={1}>
         <Text bold>{title}</Text>
         {body}
         {tiles}
@@ -558,7 +674,7 @@ export function Dialog(
 
   return DialogFrame(
     ui,
-    header,
+    dialogHeader(header, cancel.onPress),
     theme.warn,
     title,
     <Box key="dialog-lines" flexDirection="column" marginTop={1}>
@@ -611,7 +727,7 @@ export function InputDialog(
 
   return DialogFrame(
     ui,
-    header,
+    dialogHeader(header, cancel.onPress),
     theme.accent,
     title,
     <Box key="dialog-input-body" flexDirection="column" marginTop={1}>
@@ -665,7 +781,7 @@ export function ReaderDialog(
 
   return DialogFrame(
     ui,
-    header,
+    dialogHeader(header, actions.close.onPress),
     theme.accent,
     title,
     <Box key="reader-body" flexDirection="column">
@@ -677,6 +793,139 @@ export function ReaderDialog(
       </Box>
     </Box>,
     Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), tiles, { focused }),
+  )
+}
+
+/** One field of a form dialog: a line of text, with suggestions to pick under it, or a pick from options. */
+export type FormField = {
+  key: string
+  label: string
+  value: string
+  placeholder?: string
+  /** A pick from these instead of typed text (every surface but mobile draws it). */
+  options?: { value: string; label: string }[]
+  /** Values to pick under the field, such as paths matching what was typed. */
+  suggestions?: string[]
+  onInput: (value: string) => void
+  onPick?: (value: string) => void
+}
+
+/**
+ * A dialog that asks for several values at once: each field its label dim,
+ * then a bordered input or a select, and under a typed field the suggestions
+ * to pick; the main tile submits, Cancel dismisses. Enter in any field submits.
+ * Where the surface has no field, `noInput` says how else to give the values.
+ */
+export function FormDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: HeaderInfo,
+  title: string,
+  lines: DialogLine[],
+  fields: FormField[],
+  actions: { submit: { label: string; onPress: () => void }; cancel: { label: string; onPress: () => void } },
+  form: { hasField: boolean; noInput: string },
+  focused: string | null = null,
+) {
+  const { Box, Text } = ui
+  const Input = form.hasField && 'Input' in ui ? ui.Input : undefined
+  const Select = form.hasField && 'Select' in ui ? ui.Select : undefined
+
+  return DialogFrame(
+    ui,
+    dialogHeader(header, actions.cancel.onPress),
+    theme.accent,
+    title,
+    <Box key="form-body" flexDirection="column" marginTop={1} gap={1}>
+      {lines.map((line, index) => Toned(ui, `form-line-${index}`, line.text, line.tone === 'danger' ? 'danger' : line.tone === 'ok' ? 'ok' : undefined, { isDim: line.tone === 'muted', wrap: 'wrap' }))}
+      {!Input && Toned(ui, 'form-no-input', form.noInput, undefined, { isDim: true, wrap: 'wrap' })}
+      {Input &&
+        fields.map((field, index) => (
+          <Box key={`form-field-${field.key}`} flexDirection="column">
+            <Text dimColor>{field.label}</Text>
+            {field.options && Select ? (
+              <Select
+                key={`field-${field.key}`}
+                options={field.options}
+                value={field.value}
+                {...(index === 0 ? { autoFocus: true as const } : {})}
+                onSelect={value => field.onInput(value)}
+              />
+            ) : (
+              InputFrame(
+                ui,
+                `form-frame-${field.key}`,
+                true,
+                <Input
+                  key={`field-${field.key}`}
+                  value={field.value}
+                  {...(field.placeholder ? { placeholder: field.placeholder } : {})}
+                  {...(index === 0 ? { autoFocus: true as const } : {})}
+                  onInput={value => field.onInput(value)}
+                  onSubmit={value => {
+                    field.onInput(value)
+                    actions.submit.onPress()
+                  }}
+                />,
+              )
+            )}
+            {(field.suggestions ?? []).length > 0 && (
+              <Box key={`form-suggest-${field.key}`} flexDirection="column" paddingLeft={2}>
+                {(field.suggestions ?? []).map((suggestion, row) =>
+                  LinkButton(ui, `suggest-${field.key}-${row}`, suggestion, () => (field.onPick ?? field.onInput)(suggestion)),
+                )}
+              </Box>
+            )}
+          </Box>
+        ))}
+    </Box>,
+    Tiles(
+      ui,
+      Math.max(20, bodyColumns - CARD_CHROME),
+      [
+        ...(Input ? [{ key: 'form-submit', label: actions.submit.label, isMain: true, onPress: actions.submit.onPress }] : []),
+        { key: 'dialog-cancel', label: actions.cancel.label, isDismiss: true, onPress: actions.cancel.onPress },
+      ],
+      { focused },
+    ),
+  )
+}
+
+/**
+ * A dialog that shows a run's output as it arrives: its state on a line, then
+ * the lines in a numbered block, the newest at the bottom while it follows;
+ * tiles to page back and forward, to follow or stop following, to stop the
+ * run while it runs or run it again once it has ended, and Close.
+ */
+export function LogDialog(
+  ui: ElementTable,
+  bodyColumns: number,
+  header: HeaderInfo,
+  title: string,
+  status: { text: string; tone?: Tone },
+  log: { text: string; firstLine: number; empty: string },
+  actions: { older?: Tile; newer?: Tile; follow: Tile; stop?: Tile; again?: Tile; close: Tile },
+  focused: string | null = null,
+) {
+  const { Box, Code } = ui
+
+  return DialogFrame(
+    ui,
+    dialogHeader(header, actions.close.onPress),
+    theme.accent,
+    title,
+    <Box key="log-body" flexDirection="column" marginTop={1}>
+      {Toned(ui, 'log-status', status.text, status.tone)}
+      <Box key="log-lines" flexDirection="column" marginTop={1}>
+        {log.text === '' ? Toned(ui, 'log-empty', log.empty, undefined, { isDim: true }) : <Code key="log-code" source={log.text} startLine={log.firstLine} wrap="wrap" />}
+      </Box>
+    </Box>,
+    Tiles(
+      ui,
+      Math.max(20, bodyColumns - CARD_CHROME),
+      [actions.older, actions.newer, actions.follow, actions.stop, actions.again, actions.close].filter((tile): tile is Tile => tile !== undefined),
+      { focused },
+    ),
   )
 }
 
@@ -711,7 +960,7 @@ export function ChoiceDialog(
 
   return DialogFrame(
     ui,
-    header,
+    dialogHeader(header, cancel.onPress),
     theme.accent,
     title,
     <Box key="dialog-choices" flexDirection="column" marginTop={1}>

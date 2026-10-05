@@ -1,9 +1,9 @@
 {
   "name": "sc",
   "displayName": "SimpleCORE Claude Mods",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "license": "MIT",
-  "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, and a workspace pane for agents, worktrees, checkpoints, notes and diffs",
+  "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, a workspace pane for agents, worktrees, checkpoints, notes, diffs and memory, and a toolbox that runs the project's tasks",
   "author": {
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"
@@ -18,10 +18,13 @@
     "statusline",
     "git-worktree",
     "checkpoints",
-    "tui"
+    "tui",
+    "toolbox",
+    "task-runner"
   ],
   "dependencies": [
     "sc-accounts",
-    "sc-workspace"
+    "sc-workspace",
+    "sc-toolbox"
   ]
 }

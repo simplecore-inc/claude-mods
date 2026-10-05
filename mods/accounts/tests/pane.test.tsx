@@ -75,7 +75,7 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
     expect(await ui.find({ key: 'use-u2' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[SC\] / })).toBeDefined()
     // Every account is a card; the one in use is drawn in the accent color.
     expect((await ui.find({ key: 'row-u1' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan' })
     expect((await ui.find({ key: 'row-u2' }))?.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
@@ -85,11 +85,13 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     expect((await ui.find({ key: 'use-u2-tile' }))?.props).toMatchObject({ paddingX: 1, backgroundColor: '#1f4650' })
     expect((await ui.find({ key: 'remove-u2' }))?.text).toBe('✕')
     expect(await ui.find({ key: 'use-u1' })).toBeUndefined()
-    // The footer splits into equal filled tiles, one button in each.
-    for (const key of ['refresh', 'add', 'webhook', 'close']) {
+    // The footer splits into equal filled tiles, one button in each; Close is in the header.
+    expect(await ui.find({ key: 'tile-close' })).toBeUndefined()
+    expect(await ui.find({ key: 'header-exit-ground' })).toBeDefined()
+    for (const key of ['refresh', 'add', 'webhook']) {
       // One row tall: a filled tile with no border.
       const tile = (await ui.find({ key: `tile-${key}` }))?.props
-      expect(tile).toMatchObject({ width: 29 })
+      expect(tile).toMatchObject({ width: 39 })
       expect(tile?.borderStyle).toBeUndefined()
       expect(tile?.backgroundColor).toBeDefined()
       expect(await ui.find({ key })).toBeDefined()
@@ -126,7 +128,7 @@ test('removing an account asks in a dialog that names it, in place of the list',
   seedState(on, { dialog: { kind: 'remove', uuid: 'u2' } })
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
-    expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[SC\] / })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Remove jun@example.org?' })).toBeDefined()
     expect((await ui.find({ key: 'dialog-confirm' }))?.text).toBe('Remove')
     expect((await ui.find({ key: 'dialog' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'yellow' })
@@ -202,7 +204,7 @@ test('with the accounts pane closed, pressing the account\'s name opens it with 
     opened.length = 0
     // Taken by the ui.press hook, inside the person's press: the pane is asked for.
     expect(await ui.press({ key: 'band-account' })).toEqual({ element: 'band-account' })
-    expect(opened).toEqual([{ id: 'account-switch', focus: true, title: 'SC-Accounts' }])
+    expect(opened).toEqual([{ id: 'account-switch', focus: true, title: 'Accounts' }])
     expect(passedThrough).toEqual([])
     await ui.unmount()
   }
@@ -406,17 +408,17 @@ test('the webhook dialog: the switch, the method, the URL, the token, the templa
   await ui.unmount()
 })
 
-test('alone, the pane\'s header names it: SimpleCORE Mods: Accounts', async ($, on) => {
+test('alone, the pane\'s header names it: [SC] Accounts', async ($, on) => {
   seedState(on, {})
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Accounts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '[SC] Accounts' })).toBeDefined()
   await ui.unmount()
 })
 
 test('beside the workspace, the header still names the pane, a row below the engine\'s tabs', async ($, on) => {
   seedState(on, { 'sc-workspace:paneOpen': true })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Accounts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '[SC] Accounts' })).toBeDefined()
   expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(1)
   await ui.unmount()
 })
@@ -424,7 +426,7 @@ test('beside the workspace, the header still names the pane, a row below the eng
 test('alone, the header names the pane on the first row', async ($, on) => {
   seedState(on, {})
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Accounts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '[SC] Accounts' })).toBeDefined()
   expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(0)
   await ui.unmount()
 })

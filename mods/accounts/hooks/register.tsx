@@ -20,7 +20,7 @@ import {
 } from './anthropic'
 import { describeLimits, pick, releaseDateOf } from './format'
 import { messagesFor, resolveLocale } from './i18n'
-import { ChoiceDialog, Dialog, Header, InputDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { ChoiceDialog, Dialog, Header, InputDialog, paneTitle, TabBar, Tiles } from './shared/kit'
 import { addRecords, asIndex, emptyIndex, localDay, parseScan, projectOf, scannedBytes, SCAN_SCRIPT, sessionOf, indexToStore, summarize } from './usage'
 import type { UsageIndex } from './usage'
 import { UsageTab } from './views/usage'
@@ -36,7 +36,8 @@ import { WebhookDialog } from './views/webhook'
 import { resetClock } from './shared/time'
 import type { WebhookDraft } from './views/webhook'
 import { AccountsTab, STALE_MARK } from './views/accounts'
-import { StatusBand } from './views/band'
+import { isBesideOtherPanes } from './shared/panes'
+import { StatusBand, toolboxCell } from './views/band'
 import { LIVE_POLL_MS, afterRateLimit, afterSuccess, isAutomaticLookupDue, readShared } from './schedule'
 import type { Locale, Messages } from './i18n'
 import {
@@ -96,11 +97,14 @@ const ACCOUNTS_CHROME_ROWS = 9
 /** Rows the pane takes on its Usage tab. */
 const USAGE_ROWS = 44
 /** Whether the workspace's pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
-const workspacePaneOpen = { plugin: 'sc-workspace', key: 'paneOpen' } as const
+/** The toolbox's counts for its band cell; all zero when the toolbox is not installed. */
+const toolboxSummary = atom({ plugin: 'sc-toolbox', key: 'summary' } as const, { running: 0, waiting: 0, failed: 0 })
 
 const PANE = 'account-switch'
 /** The workspace's command, which the band's lines changed toggle when no workspace hook takes the press. */
 const WORKSPACE_COMMAND = 'sc:workspace'
+/** The toolbox's command: the band's toolbox cell opens its quick tiles through it when its own hook did not take the press. */
+const TOOLBOX_COMMAND = 'sc:toolbox'
 /** The plugin's name, as `ui.press` names the plugin that drew a pressed Button. */
 const PLUGIN = 'sc-accounts'
 
@@ -110,8 +114,6 @@ const BAND_ACCOUNT = 'band-account'
 function isAccountCell(element: string): boolean {
   return element === BAND_ACCOUNT || element.startsWith(`${BAND_ACCOUNT}-`)
 }
-/** The product name heading the pane; a name, so it is not translated. */
-const BRAND = 'SimpleCORE Mods'
 /** The `/config` row of the plugin's `showStatusBand` setting. */
 const BAND_SETTING = 'sc-accounts.showStatusBand'
 /** The plugin `sc` declares /sc:accounts in `commands/accounts.md`; this hook answers it. */
@@ -1235,12 +1237,7 @@ async function syncPaneOpen($: EngineInterface): Promise<boolean> {
 }
 
 /** The pane's label on the engine's tab row, shown while another pane is open beside it. */
-const TAB_LABEL = 'SC-Accounts'
-
-/** The pane's name in its header: the brand and the mod's. */
-function paneName(): string {
-  return `${BRAND}: ${MOD_NAME}`
-}
+const TAB_LABEL = 'Accounts'
 
 /**
  * What a band cell toggles: the accounts pane (the account's name), or the
@@ -1251,6 +1248,11 @@ async function toggle($: EngineInterface, target: BandTarget): Promise<void> {
   if (target === 'workspace') {
     // Queued until the session is idle; not awaited, so the press returns at once.
     void $.command.run({ command: WORKSPACE_COMMAND, args: 'toggle diff' }).catch((error: unknown) => $.ui.toast(message(error)))
+
+    return
+  }
+  if (target === 'toolbox') {
+    void $.command.run({ command: TOOLBOX_COMMAND, args: 'quick' }).catch((error: unknown) => $.ui.toast(message(error)))
 
     return
   }
@@ -1518,13 +1520,13 @@ export const register: Register = (on, options) => {
     const [verb = '', ...rest] = e.args.trim().split(/\s+/)
     const query = rest.join(' ')
     try {
-      if (verb === '') {
-        // The command opens the accounts themselves: a dialog left open is closed first.
+      if (verb === '' || verb === 'accounts') {
+        // The command opens the accounts themselves, on their own tab: a dialog left open is closed first.
         if ((await read($, dialog)) !== null) {
           await update($, dialog, () => null)
           await update($, webhookDraft, () => null)
         }
-        await openPane($)
+        await showTab($, 'accounts')
 
         return { text: m.paneOpened }
       }
@@ -1587,6 +1589,7 @@ export const register: Register = (on, options) => {
       now: await $.clock.now(),
       locale,
       room: Math.max(20, e.props.bodyColumns),
+      toolbox: toolboxCell(await read($, toolboxSummary)),
       // The ui.press hook below takes the account, and the workspace's the place and the lines;
       // this runs for a press neither took (the workspace without its hook).
       onPress: target => {
@@ -1638,9 +1641,20 @@ export const register: Register = (on, options) => {
         .then(text => text && $.ui.toast(text))
         .catch((error: unknown) => $.ui.toast(message(error)))
     }
-    // With the workspace's pane open beside it, the engine draws a tab row above the header.
-    const isUnderTabs = (await $.state.get(workspacePaneOpen)).value === true
-    const header = { brand: paneName(), release: release.version ? m.release(release.version, release.date) : undefined, isUnderTabs }
+    // With another mod's pane open beside it, the engine draws a tab row above the header.
+    const isUnderTabs = isBesideOtherPanes('sc-accounts', {
+      'sc-accounts': (await $.state.get({ plugin: 'sc-accounts', key: 'paneOpen' })).value === true,
+      'sc-workspace': (await $.state.get({ plugin: 'sc-workspace', key: 'paneOpen' })).value === true,
+      'sc-toolbox': (await $.state.get({ plugin: 'sc-toolbox', key: 'paneOpen' })).value === true,
+    })
+    const header = {
+      brand: paneTitle(MOD_NAME),
+      release: release.version ? m.release(release.version, release.date) : undefined,
+      isUnderTabs,
+      columns: bodyColumns,
+      exit: { label: `✕ ${m.closeButton}`, onPress: () => void closePane($).catch((error: unknown) => $.ui.toast(message(error))) },
+      backLabel: m.backButton,
+    }
     // A dialog takes the whole pane: the header, then the dialog.
     const asked = await read($, dialog)
     const dismiss = async () => {
@@ -1817,15 +1831,13 @@ export const register: Register = (on, options) => {
       { key: 'usage', label: m.tabUsage, hotkey: '2' },
       { key: 'storage', label: m.tabStorage, hotkey: '3' },
     ]
-    const close = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) }
     const select = (key: string) => act(() => showTab($, key as AccountsTabKey))()
     if (active === 'storage') {
       return (
         <Box flexDirection="column">
           {Header(ui, header)}
           {TabBar(ui, tabs, active, select)}
-          {Rule(ui, 'tabs-rule', bodyColumns)}
-          <Box key="body-storage" flexDirection="column" marginTop={1}>
+            <Box key="body-storage" flexDirection="column" marginTop={1}>
             {StorageTab(
               ui,
               { storage: await read($, storage), cleanupDays: await read($, cleanupDays), now: await $.clock.now(), locale, m, bodyColumns },
@@ -1846,7 +1858,7 @@ export const register: Register = (on, options) => {
               },
             )}
           </Box>
-          {Tiles(ui, bodyColumns, [{ key: 'refresh', label: m.refreshButton, isMain: true, onPress: act(() => measureStorage($)) }, close])}
+          {Tiles(ui, bodyColumns, [{ key: 'refresh', label: m.refreshButton, isMain: true, onPress: act(() => measureStorage($)) }])}
         </Box>
       )
     }
@@ -1855,8 +1867,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           {Header(ui, header)}
           {TabBar(ui, tabs, active, select)}
-          {Rule(ui, 'tabs-rule', bodyColumns)}
-          <Box key="body-usage" flexDirection="column" marginTop={1}>
+            <Box key="body-usage" flexDirection="column" marginTop={1}>
             {UsageTab(
               ui,
               {
@@ -1876,8 +1887,7 @@ export const register: Register = (on, options) => {
             )}
           </Box>
           {Tiles(ui, bodyColumns, [
-            { key: 'refresh', label: (await read($, usageScan)) ? m.refreshingButton : m.refreshButton, isMain: true, onPress: act(() => countUsage($).then(() => undefined)) },
-            close,
+            { key: 'refresh', label: (await read($, usageScan)) ? m.refreshingButton : m.refreshButton, isMain: true, onPress: act(() => countUsage($).then(() => undefined)) }
           ])}
         </Box>
       )
@@ -1887,7 +1897,6 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {Header(ui, header)}
         {TabBar(ui, tabs, active, select)}
-        {Rule(ui, 'tabs-rule', bodyColumns)}
         {AccountsTab(
           ui,
           {
@@ -1922,8 +1931,7 @@ export const register: Register = (on, options) => {
             }),
           },
           { key: 'webhook', label: m.webhookButton, onPress: act(() => openWebhookDialog($)) },
-          close,
-        ])}
+          ])}
       </Box>
     )
   })

@@ -16,6 +16,24 @@ const BAR_WIDTH = 6
 const CONTEXT_GROUND = 236
 /** The xterm-256 ground behind the lines changed. */
 const LINES_GROUND = 236
+/** The xterm-256 ground behind the toolbox cell, by what its tools are doing: idle, running, waiting, failed. */
+const TOOLBOX_GROUND = { idle: 60, running: 28, waiting: 136, failed: 124 } as const
+/**
+ * The toolbox's band cell: its name, then what runs, waits or failed unseen,
+ * and the state its ground is coloured by, the most pressing first.
+ */
+export function toolboxCell(counts: { running: number; waiting: number; failed: number }): { label: string; state: 'idle' | 'running' | 'waiting' | 'failed' } {
+  const parts = [
+    counts.running > 0 ? `${counts.running} running` : '',
+    counts.waiting > 0 ? `${counts.waiting} waiting` : '',
+    counts.failed > 0 ? `${counts.failed} failed` : '',
+  ].filter(Boolean)
+  const state = counts.failed > 0 ? 'failed' : counts.running > 0 ? 'running' : counts.waiting > 0 ? 'waiting' : 'idle'
+
+  // The cell is English in every language, as the band names the tool by its product name.
+  return { label: ['⚒ Toolbox', ...parts].join(' · '), state }
+}
+
 /** Cells between two cells of the band's status line. */
 const STATUS_GAP = 1
 
@@ -44,6 +62,8 @@ export type BandModel = {
   locale: Locale
   /** Cells the band may fill across. */
   room: number
+  /** The toolbox cell: its label, and what its tools are doing, which colours its ground. */
+  toolbox: { label: string; state: keyof typeof TOOLBOX_GROUND }
   /** Toggles what a cell's label opens: the accounts pane, or the workspace. */
   onPress: (target: BandTarget) => void
 }
@@ -253,6 +273,13 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
         ),
     })
   }
+
+  // The toolbox's cell ends the second row: pressed, the toolbox shows its tools as tiles.
+  second.push({
+    key: 'toolbox',
+    width: displayWidth(model.toolbox.label) + 2,
+    draw: () => pressCell('toolbox', 'toolbox', onGround(ansiHex(TOOLBOX_GROUND[model.toolbox.state]), [{ text: model.toolbox.label, color: ansiHex(230), bold: true }])),
+  })
 
   // One line while it fits; a new row only where the band runs out of room.
   // The context sits right before the five-hour window, beside the other gauges.

@@ -95,7 +95,7 @@ Each row says what the file is to Claude Code and how many lines it has.
 
 ## The pane's name
 
-The header names the pane, `SimpleCORE Mods: Workspace`. With the accounts pane open too, Claude Code shows the two as tabs, `SC-Workspace` and `SC-Accounts`, and the header stays, a row below the tabs.
+The header names the pane, `[SC] Workspace`. With the accounts pane open too, Claude Code shows the two as tabs, `Workspace` and `Accounts`, and the header stays, a row below the tabs.
 
 ## Dialogs
 

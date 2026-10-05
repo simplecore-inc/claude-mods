@@ -4,6 +4,36 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.5.0 (2026-10-05)
+
+### All panes
+
+- Every pane is headed `[SC] Accounts`, `[SC] Workspace` or `[SC] Toolbox`, and Claude Code's tabs for them read `Accounts`, `Workspace` and `Toolbox`.
+- **✕ Close** sits at the right of each pane's header, its first row, and in a dialog **← Back** does what Cancel does, so the way out shows however short the terminal. The footers keep only the tab's own actions.
+- The header, the tabs and the body follow one another with no blank row or rule between, so a short terminal shows more of the body; the release shows only where the header has room.
+- The header keeps its row under Claude Code's tabs whichever two of the three panes are open.
+
+### Toolbox (`sc-toolbox`)
+
+- New plugin: a project's commands as buttons, kept in `.toolbox/toolbox.json`. Shell commands run and stop with everything they started, and their log is followed live in a dialog; Claude commands run once Claude is idle; prompts fill the prompt box or are sent.
+- Values in a command are fixed or asked at each run, as text, a choice or a path completed as you type.
+- The Add tab finds the tasks of npm, Vite, Maven, Gradle, Cargo, make, just, Compose, Go and Python projects, and lists Claude Code's commands.
+- The buttons are tiles of two lines, two to a row, in a box of their own. Each says how its tool stands in words and colour: running (green, with its time and its share done, read from the output and drawn as a filling circle), waiting for Claude (yellow, blinking), done, stopped or failed; a running tool has stop and log buttons on its tile.
+- A line above the tiles sums up what runs, waits and failed. A shell tool that has run opens its log when pressed, so looking at a result never runs it again; `▶` on its tile or **▶ Run again** in its log runs it. A toast says when a shell tool finishes or fails, with the toolbox open or not.
+- Times say how long a run took and how long ago it ended (`done · took 3s · 2m 0s ago`), the same in the tiles and the list.
+- The dialog that asks for values shows the command as it will run, filled with what is typed, and names each value plainly.
+- **Before each run: Ask first** (`"confirm": true`) asks before a tool runs; `/clear`, `/reload-plugins`, `/exit`, `/logout` and `/rewind` are added with it set.
+- The `toolbox` skill tells Claude how to write `toolbox.json`.
+
+### Accounts (`sc-accounts`)
+
+- `/sc:accounts` opens the Accounts tab, as `/sc:accounts accounts` does, rather than the tab last shown.
+- The status band has a **⚒ Toolbox** cell that shows the toolbox's buttons and says what its tools are doing: running on green, waiting on yellow, failed on red until the toolbox is next opened.
+
+### All plugins
+
+- `sc` installs `sc-toolbox` too.
+
 ## 0.4.1 (2026-10-05)
 
 ### Accounts (`sc-accounts`)

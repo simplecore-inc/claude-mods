@@ -77,7 +77,7 @@ test('the tab bar shows every tab, with counts on the ones that have something',
   seedState(on, {})
   for (const surface of SURFACES) {
     const ui = await mountPane($, surface)
-    expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[SC\] / })).toBeDefined()
     for (const key of ['agents', 'checkpoints', 'notes', 'diff']) expect(await ui.find({ key: `tab-${key}` })).toBeDefined()
     // One running agent, two checkpoints, one open note, three changed files.
     for (const badge of [' 1', ' 2', ' 3']) expect(await ui.find({ type: 'Text', text: badge })).toBeDefined()
@@ -239,16 +239,16 @@ test('changeCells splits the bar by added and removed lines, scaled to the large
 })
 
 test('footer tiles keep every label on one line, moving tiles to a new row when the pane is narrow', async ($, on) => {
-  seedState(on, { tab: 'notes' })
+  seedState(on, { tab: 'diff' })
   const wide = await mountPane($, 'terminal', 100)
   expect(await wide.find({ key: 'footer-row-1' })).toBeUndefined()
-  expect((await wide.find({ key: 'tile-clear-done' }))?.props).toMatchObject({ justifyContent: 'center' })
+  expect((await wide.find({ key: 'tile-draft-commit' }))?.props).toMatchObject({ justifyContent: 'center' })
   await wide.unmount()
-  // Two tiles of at least 10 + 4 cells cannot share 20 cells: they wrap.
-  const narrow = await mountPane($, 'terminal', 20)
+  // Two tiles of at least 20 + 4 cells cannot share 30 cells: they wrap.
+  const narrow = await mountPane($, 'terminal', 30)
   expect(await narrow.find({ key: 'footer-row-1' })).toBeDefined()
-  const width = Number((await narrow.find({ key: 'tile-clear-done' }))?.props.width)
-  expect(width).toBeGreaterThanOrEqual('Clear done'.length + 4)
+  const width = Number((await narrow.find({ key: 'tile-draft-commit' }))?.props.width)
+  expect(width).toBeGreaterThanOrEqual('Draft commit message'.length + 4)
   await narrow.unmount()
 })
 
@@ -287,7 +287,7 @@ test('restoring asks in a dialog: what it goes back to, what it undoes, and how 
       props: { title: 'Workspace', isFocused: true, bodyColumns: 60, placement: 'dock' } as never,
     })
     // The pane's usual header stays; the dialog itself is a bordered box.
-    expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[SC\] / })).toBeDefined()
     expect((await ui.find({ key: 'dialog' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'yellow' })
     expect(await ui.find({ type: 'Text', text: /^Restore the working tree to / })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Checkpoint: Fix the login bug' })).toBeDefined()
@@ -514,7 +514,7 @@ test('pressing the accounts band\'s place or lines changed toggles the workspace
   expect(await band.press({ key: 'band-lines' })).toEqual({ element: 'band-lines' })
   expect(opened).toEqual(['sc-workspace'])
   // The engine's tab row names the pane short, while another pane is open beside it.
-  expect(titles).toEqual(['SC-Workspace'])
+  expect(titles).toEqual(['Workspace'])
   // Any Button of the cell, not only its first: here the directory's name.
   expect(await band.press({ key: 'band-place-1' })).toEqual({ element: 'band-place-1' })
   expect(opened).toEqual(['sc-workspace', 'sc-workspace'])
@@ -539,10 +539,10 @@ test('a workspace pane behind another pane\'s tab is opened afresh, in front, no
   expect(calls).toEqual(['close sc-workspace', 'open sc-workspace'])
 })
 
-test('alone, the pane\'s header names it: SimpleCORE Mods: Workspace', async ($, on) => {
+test('alone, the pane\'s header names it: [SC] Workspace', async ($, on) => {
   seedState(on, {})
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Workspace' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '[SC] Workspace' })).toBeDefined()
   expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(0)
   await ui.unmount()
 })
@@ -550,7 +550,7 @@ test('alone, the pane\'s header names it: SimpleCORE Mods: Workspace', async ($,
 test('beside the accounts pane, the header still names the pane, a row below the engine\'s tabs', async ($, on) => {
   seedState(on, { 'sc-accounts:paneOpen': true })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'SimpleCORE Mods: Workspace' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '[SC] Workspace' })).toBeDefined()
   expect((await ui.find({ key: 'header' }))?.props.marginTop).toBe(1)
   await ui.unmount()
 })

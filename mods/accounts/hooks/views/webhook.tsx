@@ -2,7 +2,7 @@ import type { ElementTable } from 'claude-code'
 
 import { WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS, WEBHOOK_VARIABLES } from '../webhook'
 import type { Messages } from '../i18n'
-import { CARD_CHROME, DialogFrame, IconButton, InputFrame, theme, Tiles, Toggle, Toned } from '../shared/kit'
+import { CARD_CHROME, DialogFrame, dialogHeader, IconButton, InputFrame, theme, Tiles, Toggle, Toned } from '../shared/kit'
 import type { HeaderInfo } from '../shared/kit'
 import { displayWidth, packRows, truncate } from '../shared/layout'
 
@@ -151,7 +151,7 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
 
   return DialogFrame(
     ui,
-    model.header,
+    dialogHeader(model.header, actions.cancel),
     theme.accent,
     m.webhookTitle,
     body,

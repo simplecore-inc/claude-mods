@@ -9,7 +9,7 @@
     {
       "name": "sc",
       "source": "./mods/sc",
-      "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, and a workspace pane for agents, worktrees, checkpoints, notes and diffs",
+      "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, a workspace pane for agents, worktrees, checkpoints, notes, diffs and memory, and a toolbox that runs the project's tasks",
       "category": "productivity",
       "tags": [
         "bundle",
@@ -46,6 +46,20 @@
         "checkpoints",
         "notes",
         "diff"
+      ]
+    },
+    {
+      "name": "sc-toolbox",
+      "source": "./mods/toolbox",
+      "description": "A toolbox pane: run, stop and watch the project's build tasks, scripts, Claude commands and prompts from one list",
+      "category": "development",
+      "tags": [
+        "toolbox",
+        "task-runner",
+        "npm",
+        "maven",
+        "gradle",
+        "cargo"
       ]
     }
   ]

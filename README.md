@@ -6,7 +6,7 @@
 ![Windows: untested](https://img.shields.io/badge/Windows-untested-lightgrey?logo=windows&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue)
 
-Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits and token use, see and clean up what Claude Code keeps on the machine, and keep agents, worktrees, checkpoints, diffs and memory files in one pane. Install one plugin, `sc`, and you get them all.
+Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits and token use, see and clean up what Claude Code keeps on the machine, and keep agents, worktrees, checkpoints, diffs and memory files in one pane, and run a project's builds and commands from buttons. Install one plugin, `sc`, and you get them all.
 
 ## What's inside
 
@@ -33,6 +33,16 @@ Plugins for [Claude Code](https://code.claude.com) that add panes, a status band
 - **Diff**: the files changed since the session started or since a checkpoint, up to now or a later checkpoint; each file's diff, restoring one file, and a request for a commit message.
 - **Memory**: the memory files Claude Code reads, global and project apart, to read as Markdown and search line by line.
 
+### [Toolbox](docs/toolbox.md) · `/sc:toolbox`
+
+![The toolbox buttons](docs/images/toolbox-quick.svg)
+
+- The project's commands as buttons of one size, from **⚒ Toolbox** on the status band.
+- Run and stop shell commands, and watch their log live in a dialog.
+- Add tasks found in npm, Vite, Maven, Gradle, Cargo, make, just, Compose, Go and Python projects, or Claude's own commands such as `/clear` and `/compact`.
+- Values fixed or asked at each run, with paths completed as you type.
+- Kept in `.toolbox/toolbox.json` in the project; share it or ignore it in git. A skill lets Claude write it for you.
+
 Anything that cannot be taken back asks in a dialog first; Esc cancels.
 
 ## Install
@@ -42,7 +52,7 @@ claude plugin marketplace add simplecore-inc/claude-mods
 claude plugin install sc@simplecore-mods
 ```
 
-`sc` installs `sc-accounts` and `sc-workspace` with it. The plugins are installed for your user, so they run in every session. Run `/reload-plugins` in a session that was already open.
+`sc` installs `sc-accounts`, `sc-workspace` and `sc-toolbox` with it. The plugins are installed for your user, so they run in every session. Run `/reload-plugins` in a session that was already open.
 
 To use a local clone instead, add its folder as the marketplace:
 
@@ -59,6 +69,7 @@ claude plugin marketplace update simplecore-mods
 claude plugin update sc@simplecore-mods
 claude plugin update sc-accounts@simplecore-mods
 claude plugin update sc-workspace@simplecore-mods
+claude plugin update sc-toolbox@simplecore-mods
 ```
 
 Then run `/reload-plugins` in each open session. With a local clone, `git pull` in the clone and `/reload-plugins` are enough: a plugin from a folder marketplace is read from that folder.
@@ -71,7 +82,7 @@ claude plugin prune
 claude plugin marketplace remove simplecore-mods
 ```
 
-`prune` removes `sc-accounts` and `sc-workspace`, which were installed as dependencies of `sc`; uninstall them by name instead if you installed them yourself. `marketplace remove` is only needed when you will not install from it again.
+`prune` removes `sc-accounts`, `sc-workspace` and `sc-toolbox`, which were installed as dependencies of `sc`; uninstall them by name instead if you installed them yourself. `marketplace remove` is only needed when you will not install from it again.
 
 The mods leave some data behind, which you can delete by hand:
 
@@ -81,6 +92,7 @@ The mods leave some data behind, which you can delete by hand:
 | Webhook token | macOS: the keychain item of the service `sc-webhook`. Elsewhere: `~/.claude/sc-accounts/webhook-token` |
 | Webhook template | `~/.claude/sc-accounts/` |
 | Settings, account index, notes, checkpoint lists | `~/.claude/plugins/store/sc-*.json` |
+| Tools, their logs and remembered values | in each project: `.toolbox/` |
 | Checkpoints | in each repository: the refs under `refs/sc/` and the files `.git/sc-snapshot-*.index` |
 
 `~/.claude` is `CLAUDE_CONFIG_DIR` when that is set. To delete a repository's checkpoints:

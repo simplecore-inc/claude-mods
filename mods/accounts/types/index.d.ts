@@ -111,13 +111,18 @@ export type BandSpan = {
   dimColor?: boolean
 }
 
-/** What a band cell's label toggles: the accounts pane, or the workspace. */
-export type BandTarget = 'accounts' | 'workspace'
+/** What a band cell's label toggles: the accounts pane, the workspace, or the toolbox's quick tiles. */
+export type BandTarget = 'accounts' | 'workspace' | 'toolbox'
 
 declare module 'claude-code' {
   interface PluginState {
     /** What this plugin reads of the workspace's state. */
     'sc-workspace': {
+      paneOpen: boolean
+    }
+    /** What this plugin reads of the toolbox's state: what runs, waits and failed unseen, for the band's cell. */
+    'sc-toolbox': {
+      summary: { running: number; waiting: number; failed: number }
       paneOpen: boolean
     }
     'sc-accounts': {

@@ -10,7 +10,7 @@ Keeps several Claude logins on this machine and switches every running session t
 
 | Command | What it does |
 | --- | --- |
-| `/sc:accounts` | Opens the accounts pane |
+| `/sc:accounts`, `/sc:accounts accounts` | Opens the pane on its Accounts tab |
 | `/sc:accounts list` | Prints every account with its limits and reset times |
 | `/sc:accounts use <n\|email>` | Switches to an account by its number in the list, its email, or a prefix only one email starts with |
 | `/sc:accounts remove <n\|email>` | Removes a saved account; the account in use cannot be removed |
@@ -40,7 +40,7 @@ The pane has the tabs **Accounts**, **Usage** and **Storage**; a digit switches 
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
 - `Spent past the plan: 12.34 USD of 50.00 USD`: what the account spent beyond its plan, exactly as Claude's usage lookup reports it for that account. It shows only when spending past the plan is on or something was spent; nothing is estimated.
-- The footer: **Refresh**, **Add account**, **Webhook** and **Close**.
+- The footer: **Refresh**, **Add account** and **Webhook**. **✕ Close** is at the right of the header, the first row of the pane.
 ### Usage
 
 ![The Usage tab: tokens on this machine by day, model and project](images/accounts-usage.svg)
@@ -68,7 +68,7 @@ What Claude Code keeps under `~/.claude`:
 
 ### The header
 
-- The header names the pane, `SimpleCORE Mods: Accounts`, and shows the version and release date. With the workspace pane open too, Claude Code shows the two as tabs, `SC-Accounts` and `SC-Workspace`, and the header stays, a row below the tabs.
+- The header names the pane, `[SC] Accounts`, and shows the version and release date. With the workspace pane open too, Claude Code shows the two as tabs, `Accounts` and `Workspace`, and the header stays, a row below the tabs.
 
 ## The status band
 
@@ -89,6 +89,7 @@ Some cells open a pane when pressed, and pressing again closes it:
 | --- | --- |
 | The account's name | the accounts pane |
 | The directory and branch, or the lines changed | the workspace, on its Diff tab |
+| ⚒ Toolbox | the [toolbox](toolbox.md) buttons, when `sc-toolbox` is installed; the cell says what its tools are doing (`· 1 running`, `· 1 failed`) |
 
 A pane opened this way shows at any terminal width. A pressed cell keeps its colours under the pointer.
 

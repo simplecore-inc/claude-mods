@@ -8,7 +8,8 @@ import { projectFolder } from './shared/claude'
 import { checkpointRef, clipDiff, finishAgents, keptCheckpoints, mergeCheckpoints, promptLabel, shortPath } from './git'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
-import { ChoiceDialog, Dialog, Header, InputDialog, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { isBesideOtherPanes } from './shared/panes'
+import { ChoiceDialog, Dialog, Header, InputDialog, paneTitle, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
 import { doneMarks, nextSeq, notesContext, numbered } from './notes'
 import type { DialogLine, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
@@ -65,23 +66,15 @@ const MEMORY_MAX_BYTES = 4 * 1024 * 1024
 const RULES_DEPTH = 6
 /** Finished agents kept for the session; older ones are let go. */
 const FINISHED_KEPT = 20
-/** Whether the accounts pane is open, as that plugin publishes it: with both open, the engine draws tabs. */
-const accountsPaneOpen = { plugin: 'sc-accounts', key: 'paneOpen' } as const
 
 const PANE = 'sc-workspace'
-/** The product name heading the pane; a name, so it is not translated. */
-const BRAND = 'SimpleCORE Mods'
 
 /** The mod's name in the pane's title; a name, so it is never translated. */
 const MOD_NAME = 'Workspace'
 
 /** The pane's label on the engine's tab row, shown while another pane is open beside it. */
-const TAB_LABEL = 'SC-Workspace'
+const TAB_LABEL = 'Workspace'
 
-/** The pane's name in its header: the brand and the mod's. */
-function paneName(): string {
-  return `${BRAND}: ${MOD_NAME}`
-}
 const COMMAND = 'sc:workspace'
 /** How long after a /clear ends the old session the new one is taken up, once the engine has switched ids. */
 const CLEAR_SETTLE_MS = 300
@@ -1057,9 +1050,20 @@ export const register: Register = (on, options) => {
     const bodyColumns = e.props.bodyColumns ?? 60
     // A reader page wraps at the pane's width, kept from every draw so a search hit opens at the right page.
     readerRoom = { rows: READER_PAGE_ROWS, columns: bodyColumns - 6 }
-    // With the accounts pane open beside it, the engine draws a tab row above the header.
-    const isUnderTabs = (await $.state.get(accountsPaneOpen)).value === true
-    const header = { brand: paneName(), release: release.version ? m.release(release.version, release.date) : undefined, isUnderTabs }
+    // With another mod's pane open beside it, the engine draws a tab row above the header.
+    const isUnderTabs = isBesideOtherPanes('sc-workspace', {
+      'sc-accounts': (await $.state.get({ plugin: 'sc-accounts', key: 'paneOpen' })).value === true,
+      'sc-workspace': (await $.state.get({ plugin: 'sc-workspace', key: 'paneOpen' })).value === true,
+      'sc-toolbox': (await $.state.get({ plugin: 'sc-toolbox', key: 'paneOpen' })).value === true,
+    })
+    const header = {
+      brand: paneTitle(MOD_NAME),
+      release: release.version ? m.release(release.version, release.date) : undefined,
+      isUnderTabs,
+      columns: bodyColumns,
+      exit: { label: `✕ ${m.closeButton}`, onPress: () => void closePane($).catch((error: unknown) => $.ui.toast(message(error))) },
+      backLabel: m.backButton,
+    }
     // A dialog in progress takes the whole pane: the header, then the dialog.
     const asked = await read($, dialog)
     const dismiss = async () => {
@@ -1259,7 +1263,6 @@ export const register: Register = (on, options) => {
       { key: 'diff', label: m.tabDiff, hotkey: '4', badge: diffView && diffView.files.length > 0 ? `${diffView.files.length}` : undefined },
       { key: 'memory', label: m.tabMemory, hotkey: '5' },
     ]
-    const close: Tile = { key: 'close', label: m.closeButton, isDismiss: true, onPress: act(() => closePane($)) }
     const refreshTile = (work: () => Promise<void>): Tile => ({
       key: 'refresh',
       label: working === 'refresh' ? m.refreshingButton : m.refreshButton,
@@ -1307,7 +1310,6 @@ export const register: Register = (on, options) => {
             return row ? m.checkpointTaken : m.nothingChanged
           }),
         },
-        close,
       ]
     } else if (active === 'notes') {
       body = NotesTab(
@@ -1342,7 +1344,6 @@ export const register: Register = (on, options) => {
           label: m.clearDone,
           onPress: act(() => saveNotes($, noteRows.filter(note => !note.isDone))),
         },
-        close,
       ]
     } else if (active === 'memory') {
       const files = await read($, memory)
@@ -1383,7 +1384,7 @@ export const register: Register = (on, options) => {
             })(),
         },
       )
-      tiles = [refreshTile(() => loadMemory($)), close]
+      tiles = [refreshTile(() => loadMemory($))]
     } else if (active === 'diff') {
       body = DiffTab(
         ui,
@@ -1424,7 +1425,7 @@ export const register: Register = (on, options) => {
           return m.draftCommitFilled
         }),
       }
-      tiles = diffView && diffView.files.length > 0 ? [refreshTile(() => refreshDiff($)), draft, close] : [refreshTile(() => refreshDiff($)), close]
+      tiles = diffView && diffView.files.length > 0 ? [refreshTile(() => refreshDiff($)), draft] : [refreshTile(() => refreshDiff($))]
     } else {
       body = AgentsTab(
         ui,
@@ -1443,14 +1444,13 @@ export const register: Register = (on, options) => {
       )
       tiles = [refreshTile(async () => {
         await Promise.all([refreshAgents($), refreshWorktrees($)])
-      }), close]
+      })]
     }
 
     return (
       <Box flexDirection="column">
         {Header(ui, header)}
         {TabBar(ui, tabs, active, select)}
-        {Rule(ui, 'tabs-rule', bodyColumns)}
         <Box key={`body-${active}`} flexDirection="column" marginTop={1}>
           {body}
         </Box>

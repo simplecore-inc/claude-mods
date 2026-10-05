@@ -1,0 +1,26 @@
+{
+  "name": "sc-toolbox",
+  "displayName": "SimpleCORE Toolbox",
+  "version": "0.5.0",
+  "license": "MIT",
+  "description": "A toolbox pane for Claude Code: run, stop and watch the project's build tasks, scripts, Claude commands and prompts from one list",
+  "author": {
+    "name": "SimpleCORE",
+    "email": "dev@simplecore.kr"
+  },
+  "homepage": "https://github.com/simplecore-inc/claude-mods/blob/main/docs/toolbox.md",
+  "repository": "https://github.com/simplecore-inc/claude-mods",
+  "keywords": [
+    "claude-code",
+    "toolbox",
+    "task-runner",
+    "npm",
+    "maven",
+    "gradle",
+    "cargo",
+    "vite",
+    "tui",
+    "mod"
+  ],
+  "types": "./types/index.d.ts"
+}
