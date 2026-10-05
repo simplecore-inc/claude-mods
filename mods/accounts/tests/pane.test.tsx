@@ -579,3 +579,17 @@ test('on mobile, with no field, the cleanup dialog says where to clean up instea
   expect(await ui.find({ type: 'Text', text: /terminal or the desktop app/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('every gauge takes the same width on every card, whether a reset line shows under it or not', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'terminal')
+  // mina's 5h shows a reset line; kai's does not.
+  const minaFive = await ui.find({ key: 'u1-5h-slot' })
+  const kaiFive = await ui.find({ key: 'u3-5h-slot' })
+  expect(minaFive?.props.width).toBeGreaterThan(0)
+  expect(kaiFive?.props.width).toBe(minaFive?.props.width)
+  // wk and Fable reset together: one block, the gauges side by side with no slot between them.
+  expect(await ui.find({ key: 'u1-wk-slot' })).toBeUndefined()
+  expect((await ui.find({ key: 'u1-wk' }))?.props.width).toBe(2 * Number(minaFive?.props.width ?? 0) + 3)
+  await ui.unmount()
+})

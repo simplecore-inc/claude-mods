@@ -48,13 +48,26 @@ function limitCells(reading: UsageView | undefined, now: number, locale: Locale,
   }
 
   return groups.map(group => {
-    const heads = group.map(limit => `${limit.label} ${bar(limit.percent, GAUGE_WIDTH)} ${Math.round(limit.percent)}%`)
     const reset = resetText(group[0]?.resetsAt, now, locale, m.now)
-    const foot = reset ? `↻ ${reset}` : ''
-    const headWidth = heads.reduce((sum, head) => sum + displayWidth(head), 0) + CELL_GAP * (heads.length - 1)
 
-    return { group, foot, width: Math.max(headWidth, displayWidth(foot)) }
+    return { group, foot: reset ? `↻ ${reset}` : '' }
   })
+}
+
+/**
+ * The cells every gauge of every card takes, so the gauges stand in the same
+ * columns on every card whatever a window shows: the widest gauge, its figure
+ * counted as `100%`, and wide enough that a group's reset line fits under the
+ * gauges it spans.
+ */
+export function gaugeSlot(cells: { group: LimitView[]; foot: string }[]): number {
+  let slot = 0
+  for (const { group, foot } of cells) {
+    for (const limit of group) slot = Math.max(slot, displayWidth(`${limit.label} ${bar(100, GAUGE_WIDTH)} 100%`))
+    slot = Math.max(slot, Math.ceil((displayWidth(foot) - CELL_GAP * (group.length - 1)) / Math.max(1, group.length)))
+  }
+
+  return slot
 }
 
 export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: AccountsActions) {
@@ -62,6 +75,10 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
   const { list, liveUuid, readings, now, locale, m } = model
   // The card's border and padding take CARD_CHROME cells, the limits' indent two more.
   const room = Math.max(20, model.bodyColumns - CARD_CHROME - 2)
+  // One gauge width for every card, so the columns line up across them.
+  const cellsOf = new Map(list.map(one => [one.uuid, limitCells(readings[one.uuid], now, locale, m)]))
+  const slot = gaugeSlot([...cellsOf.values()].flat())
+  const spanOf = (count: number) => count * slot + CELL_GAP * (count - 1)
 
   return (
     <Box key="accounts" flexDirection="column">
@@ -94,12 +111,24 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               )}
             </Box>
             <Box flexDirection="column" paddingLeft={2}>
-              {packRows(limitCells(reading, now, locale, m), room, CELL_GAP).map((row, rowIndex) => (
+              {packRows(
+                (cellsOf.get(one.uuid) ?? []).map(cell => ({ ...cell, width: spanOf(cell.group.length) })),
+                room,
+                CELL_GAP,
+              ).map((row, rowIndex) => (
                 <Box key={`${one.uuid}-limits-${rowIndex}`} gap={CELL_GAP}>
                   {row.map(({ group, foot, width }) => (
                     <Box key={`${one.uuid}-${group[0]?.label}`} flexDirection="column" width={width}>
                       <Box gap={CELL_GAP}>
-                        {group.map(limit => Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent))}
+                        {/* A lone gauge fills its slot; gauges that reset together stand side by side
+                            as one block, which takes the slots they span. */}
+                        {group.length === 1
+                          ? group.map(limit => (
+                              <Box key={`${one.uuid}-${limit.label}-slot`} width={slot} flexShrink={0}>
+                                {Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent)}
+                              </Box>
+                            ))
+                          : group.map(limit => Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent))}
                       </Box>
                       {foot !== '' && <Text dimColor>{foot}</Text>}
                     </Box>
