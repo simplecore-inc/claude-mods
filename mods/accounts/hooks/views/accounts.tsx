@@ -2,9 +2,9 @@ import type { ElementTable } from 'claude-code'
 
 import type { AccountView, LimitView, UsageView } from '../../types'
 import { moneyText } from '../anthropic'
-import { bar, displayWidth, formatDuration, isSameReset, packRows, resetText } from '../format'
+import { bar, displayWidth, formatDuration, isSameReset, packRows, resetCountdown, resetText } from '../format'
 import type { Locale, Messages } from '../i18n'
-import { Badge, Card, CARD_CHROME, CELL_GAP, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton, Toned } from '../shared/kit'
+import { Badge, Card, CARD_CHROME, CELL_GAP, countdownTone, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton, Toned } from '../shared/kit'
 
 export const STALE_MARK = '◷'
 
@@ -49,8 +49,10 @@ function limitCells(reading: UsageView | undefined, now: number, locale: Locale,
 
   return groups.map(group => {
     const reset = resetText(group[0]?.resetsAt, now, locale, m.now)
+    // A weekly window's last three days colour its labels and its reset; the five-hour window never counts down.
+    const near = group[0]?.label === '5h' ? undefined : countdownTone(resetCountdown(group[0]?.resetsAt, now))
 
-    return { group, foot: reset ? `↻ ${reset}` : '' }
+    return { group, foot: reset ? `↻ ${reset}` : '', near }
   })
 }
 
@@ -117,7 +119,7 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
                 CELL_GAP,
               ).map((row, rowIndex) => (
                 <Box key={`${one.uuid}-limits-${rowIndex}`} gap={CELL_GAP}>
-                  {row.map(({ group, foot, width }) => (
+                  {row.map(({ group, foot, near, width }) => (
                     <Box key={`${one.uuid}-${group[0]?.label}`} flexDirection="column" width={width}>
                       <Box gap={CELL_GAP}>
                         {/* A lone gauge fills its slot; gauges that reset together stand side by side
@@ -125,12 +127,12 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
                         {group.length === 1
                           ? group.map(limit => (
                               <Box key={`${one.uuid}-${limit.label}-slot`} width={slot} flexShrink={0}>
-                                {Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent)}
+                                {Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent, undefined, near)}
                               </Box>
                             ))
-                          : group.map(limit => Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent))}
+                          : group.map(limit => Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent, undefined, near))}
                       </Box>
-                      {foot !== '' && <Text dimColor>{foot}</Text>}
+                      {foot !== '' && Toned(ui, `${one.uuid}-${group[0]?.label}-reset`, foot, near, near ? { isBold: true } : { isDim: true })}
                     </Box>
                   ))}
                 </Box>

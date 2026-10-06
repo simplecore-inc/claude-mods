@@ -595,3 +595,14 @@ test('every gauge takes the same width on every card, whether a reset line shows
   expect((await ui.find({ key: 'u1-wk' }))?.props.width).toBe(2 * Number(minaFive?.props.width ?? 0) + 3)
   await ui.unmount()
 })
+
+test('on the day a weekly window resets, its reset reads red; the five-hour window\'s stays dim', async ($, on) => {
+  // Two hours before the weekly reset, whatever the machine's time zone: the same local day.
+  seedState(on, {}, Date.parse('2099-01-03T00:00:00Z'))
+  const ui = await mountPane($, 'terminal')
+  const resets = await ui.findAll({ type: 'Text', text: /^↻ / })
+  const weekly = resets.find(found => /\(1h|\(2h/.test(found.text ?? ''))
+  expect(weekly?.props).toMatchObject({ color: 'red', bold: true })
+  expect(resets.filter(found => found.props.color === undefined && found.props.dimColor === true).length).toBeGreaterThan(0)
+  await ui.unmount()
+})

@@ -1,12 +1,12 @@
 import type { ElementTable, RenderElement } from 'claude-code'
 
 import type { AccountView, BandSpan, BandTarget, LimitView, StatusInfo, UsageView } from '../../types'
-import { bar, barParts, displayWidth, packRows, resetClock, severityColor } from '../format'
+import { bar, barParts, displayWidth, packRows, resetClock, resetCountdown, severityColor } from '../format'
 import type { Locale } from '../i18n'
 import { ansiHex, contextLabelColor, contextScaled, modelPill, pillWidth, placePill, reviewMark } from '../statusline'
 import type { PillSegment } from '../statusline'
 import { STALE_MARK } from './accounts'
-import { Rule } from '../shared/kit'
+import { countdownTone, Rule, theme } from '../shared/kit'
 
 // ui-check: raw-colours - the band redraws the status line's own ANSI colours, which are data here, not theme.
 
@@ -223,16 +223,18 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     const reset = resetClock(limit.resetsAt, now, locale)
     const text = `${limit.label} ${bar(limit.percent, BAR_WIDTH)} ${Math.round(limit.percent)}%${reset ? ` ↻ ${reset}` : ''}`
     const { filled, rest } = barParts(limit.percent, BAR_WIDTH)
+    // A weekly window's last three days colour its label and its reset; the five-hour window never counts down.
+    const near = limit.label === '5h' ? undefined : countdownTone(resetCountdown(limit.resetsAt, now))
     second.push({
       key: limit.label,
       width: displayWidth(text),
       draw: () =>
         drawSpans(`usage-${limit.label}`, [
-          { text: `${limit.label} `, dimColor: true },
+          near ? { text: `${limit.label} `, color: theme[near], bold: true } : { text: `${limit.label} `, dimColor: true },
           { text: filled, color: severityColor(limit.percent) },
           { text: rest, color: 'gray', dimColor: true },
           { text: ` ${Math.round(limit.percent)}%` },
-          ...(reset ? [{ text: ` ↻ ${reset}`, dimColor: true }] : []),
+          ...(reset ? [near ? { text: ` ↻ ${reset}`, color: theme[near], bold: true } : { text: ` ↻ ${reset}`, dimColor: true }] : []),
         ]),
     })
   }

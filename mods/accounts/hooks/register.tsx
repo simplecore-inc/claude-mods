@@ -152,6 +152,15 @@ const MAX_COUNTED_FILE = 4 * 1024 * 1024
 /** How often the open pane redraws, so each account's "updated N min ago" is at most this late. */
 const PANE_TICK_MS = 10 * 1000
 let m: Messages = messagesFor(locale)
+/** Whether this session has been told, once, that clicks need fullscreen mode. */
+let isClickHintShown = false
+
+/** Marks the click hint as shown when `text` carries it. */
+function opened(text: string): string {
+  if (text.includes(m.clickHint)) isClickHintShown = true
+
+  return text
+}
 
 /** What the session's status is read from, set at session start. */
 let collector: StatusCollector | null = null
@@ -1517,6 +1526,8 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
+    // Off fullscreen no click reaches a pane: the first pane a command opens says how to press without one.
+    const hint = e.presentation?.isFullscreen === false && !isClickHintShown ? ` ${m.clickHint}` : ''
     const [verb = '', ...rest] = e.args.trim().split(/\s+/)
     const query = rest.join(' ')
     try {
@@ -1528,12 +1539,12 @@ export const register: Register = (on, options) => {
         }
         await showTab($, 'accounts')
 
-        return { text: m.paneOpened }
+        return { text: opened(m.paneOpened + hint) }
       }
       if (verb === 'usage' || verb === 'storage') {
         await showTab($, verb)
 
-        return { text: m.paneOpened }
+        return { text: opened(m.paneOpened + hint) }
       }
       if (verb === 'list') return { text: await listText($) }
       if (verb === 'refresh') {
@@ -1545,7 +1556,7 @@ export const register: Register = (on, options) => {
       if (verb === 'webhook') {
         await openWebhookDialog($)
 
-        return { text: m.paneOpened }
+        return { text: opened(m.paneOpened + hint) }
       }
       if (verb === 'band') {
         if (query !== 'on' && query !== 'off') return { text: m.bandUsage }

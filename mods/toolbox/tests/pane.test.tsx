@@ -115,3 +115,13 @@ test('a shell tool that has run opens its log when pressed and runs again from i
   expect(await ui.find({ key: 'quick-run-test' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('off fullscreen the first command that opens the pane says clicks need fullscreen, and only once', async ($, on) => {
+  seedState(on, {})
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
+  const typed = (isFullscreen: boolean) => ({ command: 'sc:toolbox', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen, columns: 100 } }) as never
+  expect((await $.command.run(typed(true))).text).toBe('Opened the toolbox.')
+  expect((await $.command.run(typed(false))).text).toMatch(/^Opened the toolbox\. Clicks reach the panes only in fullscreen mode/)
+  expect((await $.command.run(typed(false))).text).toBe('Opened the toolbox.')
+})

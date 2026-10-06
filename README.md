@@ -8,6 +8,9 @@
 
 Plugins for [Claude Code](https://code.claude.com) that add panes, a status band and slash commands to the terminal: switch between several Claude accounts, watch their usage limits and token use, see and clean up what Claude Code keeps on the machine, and keep agents, worktrees, checkpoints, diffs and memory files in one pane, and run a project's builds and commands from buttons. Install one plugin, `sc`, and you get them all.
 
+> [!IMPORTANT]
+> **Clicking needs Claude Code's fullscreen mode.** The buttons, tabs, tiles and status band cells answer a mouse click only while Claude Code draws in fullscreen mode. Turn it on once with `/tui fullscreen`, which is kept as `"tui": "fullscreen"` in `~/.claude/settings.json`. In the default mode Claude Code passes no click to the plugins, on every platform, Windows and WSL included. See [Clicking and the keyboard](#clicking-and-the-keyboard).
+
 ## What's inside
 
 ### [Accounts](docs/accounts.md) · `/sc:accounts`
@@ -44,6 +47,22 @@ Plugins for [Claude Code](https://code.claude.com) that add panes, a status band
 - Kept in `.toolbox/toolbox.json` in the project; share it or ignore it in git. A skill lets Claude write it for you.
 
 Anything that cannot be taken back asks in a dialog first; Esc cancels.
+
+## Clicking and the keyboard
+
+| Requirement | Why |
+| --- | --- |
+| Claude Code in fullscreen mode: `/tui fullscreen`, or `"tui": "fullscreen"` in `~/.claude/settings.json` | Only the fullscreen mode reads the mouse; in the default mode no click reaches a plugin |
+| A terminal that passes mouse events to the program running in it; inside tmux, `set -g mouse on` | A terminal that keeps the mouse for its own text selection sends Claude Code no click to pass on |
+
+Without a click, every control is reached from the keyboard:
+
+- `ctrl+x` then `Tab` gives the open pane, or the status band, the keyboard.
+- `Tab` and the arrow keys move between buttons; `Enter` presses the one with the ring.
+- A digit picks a tab; `Esc` goes back from a dialog and closes a pane.
+- Every pane also opens from its command: `/sc:accounts`, `/sc:workspace`, `/sc:toolbox`.
+
+The first pane a command opens outside fullscreen mode says so in its reply.
 
 ## Install
 

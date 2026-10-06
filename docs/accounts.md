@@ -2,6 +2,9 @@
 
 Plugin `sc-accounts`, folder `mods/accounts`. [Back to the overview](../README.md)
 
+> [!IMPORTANT]
+> Clicks reach this plugin only in Claude Code's fullscreen mode (`/tui fullscreen`). In the default mode, use the keyboard: `ctrl+x` `Tab`, then `Tab` and `Enter`. See [Clicking and the keyboard](../README.md#clicking-and-the-keyboard).
+
 Keeps several Claude logins on this machine and switches every running session to any of them in one step. It shows each account's five-hour, weekly and per-model usage, and puts the session's status in a band above the prompt.
 
 ![The accounts pane: a card per account with usage bars and reset times](images/accounts-pane.svg)
@@ -36,7 +39,7 @@ The pane has the tabs **Accounts**, **Usage** and **Storage**; a digit switches 
 ### Accounts
 
 - One card per account, the account in use outlined and marked **active**.
-- A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 17:00(3h 05m)` today, or `↻ Wed 10/7 11:00(2d 20h)` on another day. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line.
+- A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 17:00(3h 05m)` today, or `↻ Wed 10/7 11:00(2d 20h)` on another day. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line. In a weekly window's last three days its labels and reset line turn yellow, then orange the day before, then red on the day it resets, counted in local calendar days; the five-hour window stays as it is.
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
 - `Spent past the plan: 12.34 USD of 50.00 USD`: what the account spent beyond its plan, exactly as Claude's usage lookup reports it for that account. It shows only when spending past the plan is on or something was spent; nothing is estimated.
@@ -79,7 +82,7 @@ A band above the prompt, under a dim rule. It stays on one line and wraps only w
 - the live account
 - the model, effort (or ULTRACODE) and fast mode
 - the current task
-- the session's context gauge, and five-hour and weekly usage
+- the session's context gauge, and five-hour and weekly usage; the weekly label and its reset turn yellow three days before the reset, orange the day before and red on the day
 - the directory, branch and PR
 - the lines added and removed, on a filled block
 

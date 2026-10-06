@@ -12,6 +12,8 @@ export const theme = {
   accent: 'cyan',
   danger: 'red',
   warn: 'yellow',
+  /** Between warn and danger: a weekly reset two days out. */
+  caution: '#ff8c1a',
   ok: 'green',
   track: 'gray',
   /** The footer tiles' fill, the main tile's, and either under the pointer. */
@@ -171,7 +173,7 @@ export function Card(ui: ElementTable, key: string, isAccent: boolean, children:
 }
 
 /** What a piece of text means, which sets its colour. */
-export type Tone = 'accent' | 'ok' | 'danger' | 'warn' | 'stale'
+export type Tone = 'accent' | 'ok' | 'danger' | 'warn' | 'caution' | 'stale'
 
 /**
  * Text in the colour of what it means: current or selected `accent`, added or
@@ -266,14 +268,19 @@ export function Section(ui: ElementTable, key: string, title: string, detail?: s
   )
 }
 
-/** A thin gauge: its label, the used part coloured by severity over a dim track, the percentage. */
-export function Gauge(ui: ElementTable, key: string, label: string, percent: number, color = severityColor(percent)) {
+/** The tone of a weekly window's label and reset as its reset nears: yellow three days out, orange two, red on the day. */
+export function countdownTone(day: 1 | 2 | 3 | undefined): Tone | undefined {
+  return day === 1 ? 'danger' : day === 2 ? 'caution' : day === 3 ? 'warn' : undefined
+}
+
+/** A thin gauge: its label (dim, or bold in `labelTone`), the used part coloured by severity over a dim track, the percentage. */
+export function Gauge(ui: ElementTable, key: string, label: string, percent: number, color = severityColor(percent), labelTone?: Tone) {
   const { Text } = ui
   const { filled, rest } = barParts(percent, GAUGE_WIDTH)
 
   return (
     <Text key={key}>
-      <Text dimColor>{`${label} `}</Text>
+      {labelTone ? <Text color={theme[labelTone]} bold>{`${label} `}</Text> : <Text dimColor>{`${label} `}</Text>}
       <Text color={color}>{filled}</Text>
       <Text color={theme.track} dimColor>
         {rest}

@@ -53,6 +53,22 @@ export function resetClock(
   return locale === 'ko' ? `${date}(${weekday}) ${time}` : `${weekday} ${date} ${time}`
 }
 
+/**
+ * Which day of the last three before a reset it is, counted in local calendar
+ * days: 1 on the day of the reset, 2 the day before, 3 the day before that;
+ * undefined further off, once it has passed, or with no reset.
+ */
+export function resetCountdown(resetsAt: string | undefined, now: number, offsetMinutes?: number): 1 | 2 | 3 | undefined {
+  if (!resetsAt) return undefined
+  const at = Date.parse(resetsAt)
+  if (Number.isNaN(at) || at <= now) return undefined
+  const offset = (offsetMinutes ?? new Date(at).getTimezoneOffset()) * 60000
+  const day = (ms: number) => Math.floor((ms - offset) / 86_400_000)
+  const left = day(at) - day(now) + 1
+
+  return left === 1 || left === 2 || left === 3 ? left : undefined
+}
+
 /** `17:00(2h 36m)`, `10/7(수) 11:00(2d 20h)`: when a window resets, and how long until then. */
 export function resetText(
   resetsAt: string | undefined,

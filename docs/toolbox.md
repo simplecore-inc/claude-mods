@@ -2,6 +2,9 @@
 
 Plugin `sc-toolbox`, folder `mods/toolbox`. [Back to the overview](../README.md)
 
+> [!IMPORTANT]
+> Clicks reach this plugin only in Claude Code's fullscreen mode (`/tui fullscreen`). In the default mode, use the keyboard: `ctrl+x` `Tab`, then `Tab` and `Enter`. See [Clicking and the keyboard](../README.md#clicking-and-the-keyboard).
+
 Runs the commands a project needs often (a build, a dev server, a test run, a Claude command or a prompt) from buttons, and stops them. Press **⚒ Toolbox** on the [status band](accounts.md#the-status-band) or run `/sc:toolbox` to show the tools as buttons of one size; **⚙ Settings** opens the pane where tools are added and edited.
 
 ![The toolbox buttons](images/toolbox-quick.svg)

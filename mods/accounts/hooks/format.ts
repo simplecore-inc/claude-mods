@@ -4,7 +4,7 @@ import { resetText } from './shared/time'
 
 export { bar, barParts, displayWidth, packRows, severityColor } from './shared/layout'
 export { releaseDateOf } from './shared/locale'
-export { formatDuration, resetClock, resetText, untilReset } from './shared/time'
+export { formatDuration, resetClock, resetCountdown, resetText, untilReset } from './shared/time'
 
 /** `5h 26% → 17:00(2h 56m) · wk 45% → Wed 10/7 11:00(2d 20h)`. */
 export function describeLimits(limits: LimitView[], now: number, nowLabel = 'now', locale: Locale = 'en'): string {

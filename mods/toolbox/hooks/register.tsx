@@ -87,6 +87,15 @@ type Asked = { kind: 'ask' | 'log' | 'edit' | 'remove' | 'restart' | 'confirm'; 
 
 let locale: Locale = 'en'
 let m: Messages = messagesFor(locale)
+/** Whether this session has been told, once, that clicks need fullscreen mode. */
+let isClickHintShown = false
+
+/** Marks the click hint as shown when `text` carries it. */
+function opened(text: string): string {
+  if (text.includes(m.clickHint)) isClickHintShown = true
+
+  return text
+}
 let release: { version?: string; date?: string } = {}
 /** The project's root: where `.toolbox/` lives and commands run from. */
 let root = ''
@@ -568,6 +577,8 @@ export const register: Register = on => {
 
   // `commands/toolbox.md` of the plugin `sc` declares /sc:toolbox; this hook answers it.
   on('command.run', { command: COMMAND }, async ($, e) => {
+    // Off fullscreen no click reaches a pane: the first pane a command opens says how to press without one.
+    const hint = e.presentation?.isFullscreen === false && !isClickHintShown ? ` ${m.clickHint}` : ''
     const [verb = ''] = e.args.trim().split(/\s+/)
     try {
       // A command opens the Add tab afresh, without a filter typed in an earlier visit.
@@ -575,7 +586,7 @@ export const register: Register = on => {
       if (verb === 'add' || verb === 'tools') await openPane($, verb)
       else await openPane($, 'quick')
 
-      return { text: verb === 'add' ? m.openedAdd : verb === 'tools' ? m.openedSettings : m.openedQuick }
+      return { text: opened((verb === 'add' ? m.openedAdd : verb === 'tools' ? m.openedSettings : m.openedQuick) + hint) }
     } catch (error) {
       return { text: message(error) }
     }

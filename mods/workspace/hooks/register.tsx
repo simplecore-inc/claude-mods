@@ -113,6 +113,15 @@ const DIFF_PAGE_LINES = 24
 
 let locale: Locale = 'en'
 let m: Messages = messagesFor(locale)
+/** Whether this session has been told, once, that clicks need fullscreen mode. */
+let isClickHintShown = false
+
+/** Marks the click hint as shown when `text` carries it. */
+function opened(text: string): string {
+  if (text.includes(m.clickHint)) isClickHintShown = true
+
+  return text
+}
 let release: { version?: string; date?: string } = {}
 /** The repository's top directory, or null outside a repository. */
 let root: string | null = null
@@ -999,12 +1008,14 @@ export const register: Register = (on, options) => {
 
   // `commands/workspace.md` of the plugin `sc` declares /sc:workspace; this hook answers it.
   on('command.run', { command: COMMAND }, async ($, e) => {
+    // Off fullscreen no click reaches a pane: the first pane a command opens says how to press without one.
+    const hint = e.presentation?.isFullscreen === false && !isClickHintShown ? ` ${m.clickHint}` : ''
     const [first = '', ...rest] = e.args.trim().split(/\s+/)
     try {
       if (first === '') {
         await openPane($)
 
-        return { text: m.paneOpened(tabLabel(await read($, tab))) }
+        return { text: opened(m.paneOpened(tabLabel(await read($, tab))) + hint) }
       }
       // `toggle [tab]`: closes the pane when it is open, else opens it, on `tab` when one is named.
       if (first === 'toggle') {
@@ -1030,7 +1041,7 @@ export const register: Register = (on, options) => {
       if ((TABS as string[]).includes(first)) {
         await openPane($, first as Tab)
 
-        return { text: m.paneOpened(tabLabel(first as Tab)) }
+        return { text: opened(m.paneOpened(tabLabel(first as Tab)) + hint) }
       }
 
       return { text: m.unknownTab(first) }

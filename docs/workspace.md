@@ -2,6 +2,9 @@
 
 Plugin `sc-workspace`, folder `mods/workspace`. [Back to the overview](../README.md)
 
+> [!IMPORTANT]
+> Clicks reach this plugin only in Claude Code's fullscreen mode (`/tui fullscreen`). In the default mode, use the keyboard: `ctrl+x` `Tab`, then `Tab` and `Enter`. See [Clicking and the keyboard](../README.md#clicking-and-the-keyboard).
+
 One pane with a tab for each part of the session: its agents and the repository's worktrees, checkpoints of the working tree, notes, the changes made, and the memory files Claude Code reads. Open it with `/sc:workspace`, or by pressing the directory and branch or the lines changed on the [status band](accounts.md#the-status-band). A digit (1 to 5) switches tabs.
 
 ![The workspace pane on its Agents tab](images/workspace-pane.svg)
