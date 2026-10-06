@@ -2,6 +2,20 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.5.2 (2026-10-06)
+
+### All plugins
+
+- Clicks reach the panes only in Claude Code's fullscreen mode (`/tui fullscreen`). The README and each plugin's page say so up front, with the keyboard way around it, and the first pane a command opens outside fullscreen mode says so in its reply.
+- A pane opened by a command, a button or the band takes the keyboard: `Tab` and the arrows move, `Enter` presses, a digit picks a tab and `Esc` closes it, with no mouse.
+
+### Accounts (`sc-accounts`)
+
+- **Switch** asks first in a dialog that holds the keyboard on **Cancel**, as removing an account does, so an `Enter` meant for the prompt never changes every session's login.
+- A switch and a lookup refreshing a saved account's token run one at a time, and a lookup reads which login Claude Code uses before each account: an account that became live meanwhile is never refreshed with the same refresh token twice.
+- A weekly window's label and reset turn yellow three local days before it resets, orange the day before and red on the day, on the band and on every card.
+- The account in use reads in its Active badge's colour.
+
 ## 0.5.1 (2026-10-05)
 
 ### Workspace (`sc-workspace`)

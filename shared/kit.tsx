@@ -663,7 +663,9 @@ export function DialogFrame(
  * and `holdToasts`: the pane's usual header, then a bordered box holding the
  * title, the facts the choice rests on, and the two tiles, the confirming one
  * focused so Enter answers. The border takes the warning colour: what the
- * dialog confirms is hard to take back.
+ * dialog confirms is hard to take back. With `defaultFocus: 'cancel'` Cancel
+ * holds the keyboard first, so an Enter meant for the prompt cancels: for an
+ * action that reaches past this pane (every session's login, saved data).
  */
 export function Dialog(
   ui: ElementTable,
@@ -673,10 +675,12 @@ export function Dialog(
   lines: DialogLine[],
   confirm: { label: string; onPress: () => void },
   cancel: { label: string; onPress: () => void },
-  /** The key of the tile holding the keyboard; the confirming tile until the ring moves. */
+  /** The key of the tile holding the keyboard; the one `defaultFocus` names until the ring moves. */
   focused: string | null = null,
+  defaultFocus: 'confirm' | 'cancel' = 'confirm',
 ) {
   const { Box, Text } = ui
+  const isCancelFirst = defaultFocus === 'cancel'
   const color = (tone: DialogLine['tone']) => (tone === 'danger' ? theme.danger : tone === 'ok' ? theme.ok : undefined)
 
   return DialogFrame(
@@ -695,10 +699,10 @@ export function Dialog(
       ui,
       Math.max(20, bodyColumns - CARD_CHROME),
       [
-        { key: 'dialog-confirm', label: confirm.label, isMain: true, isFocused: true, onPress: confirm.onPress },
-        { key: 'dialog-cancel', label: cancel.label, isDismiss: true, onPress: cancel.onPress },
+        { key: 'dialog-confirm', label: confirm.label, isMain: true, isFocused: !isCancelFirst, onPress: confirm.onPress },
+        { key: 'dialog-cancel', label: cancel.label, isDismiss: true, isFocused: isCancelFirst, onPress: cancel.onPress },
       ],
-      { focused: focused ?? 'dialog-confirm' },
+      { focused: focused ?? (isCancelFirst ? 'dialog-cancel' : 'dialog-confirm') },
     ),
   )
 }

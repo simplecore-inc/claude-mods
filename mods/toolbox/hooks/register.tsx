@@ -409,7 +409,8 @@ async function runTool($: EngineInterface, tool: Tool, values: Record<string, st
 
 // ── pane ──────────────────────────────────────────────────────────────────
 
-async function openPane($: EngineInterface, next?: Tab | 'quick', focus = false): Promise<void> {
+// Opened only by what the person did, the pane takes the keyboard: with no mouse nothing else hands it the keys.
+async function openPane($: EngineInterface, next?: Tab | 'quick', focus = true): Promise<void> {
   if (next === 'quick') await update($, tab, () => 'tools')
   else if (next) await update($, tab, () => next)
   quick = next === 'quick'

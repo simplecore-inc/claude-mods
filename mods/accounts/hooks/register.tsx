@@ -53,6 +53,7 @@ import {
   parseCredential,
 } from './keychain'
 import type { Credential } from './keychain'
+import { serialQueue } from './queue'
 import { deleteFileArgv, detectPlatform, privateWriteArgv, vaultFilePath } from './platform'
 import type { Platform } from './platform'
 
@@ -738,6 +739,14 @@ async function tokenOwner($: EngineInterface, credential: Credential): Promise<O
   }
 }
 
+/**
+ * A switch and each account's token work run one at a time in this session:
+ * a lookup refreshing an account's token while a switch makes it the live
+ * login would refresh it twice with one refresh token, and the rotation
+ * would leave Claude Code holding a token already replaced.
+ */
+const exclusive = serialQueue()
+
 /** Refreshes a saved, inactive account's access token when it is near expiry. */
 async function ensureFresh($: EngineInterface, uuid: string, credential: Credential): Promise<Credential> {
   const now = await $.clock.now()
@@ -754,12 +763,19 @@ async function ensureFresh($: EngineInterface, uuid: string, credential: Credent
 async function switchTo($: EngineInterface, uuid: string): Promise<string> {
   const target = (await read($, accounts)).find(one => one.uuid === uuid)
   if (!target) throw new Error('no saved account with that id')
+  await exclusive(() => installLogin($, uuid, target.email))
+  await refreshLive($)
 
+  return m.switched(target.email)
+}
+
+/** Files the outgoing login and writes the saved one in its place: a switch's part that no lookup may overlap. */
+async function installLogin($: EngineInterface, uuid: string, email: string): Promise<void> {
   // File the outgoing login first: Claude Code may have rotated its tokens.
   await syncLive($)
   const credential = await readVault($, uuid)
   const account = (await $.store.get(oauthAccountKey(uuid))) as OauthAccount | undefined
-  if (credential === null || !account) throw new Error(`${target.email}: ${m.noStoredLogin}`)
+  if (credential === null || !account) throw new Error(`${email}: ${m.noStoredLogin}`)
 
   const fresh = await ensureFresh($, uuid, credential)
   await writeLiveCredential($, fresh)
@@ -768,9 +784,6 @@ async function switchTo($: EngineInterface, uuid: string): Promise<string> {
   await writeLiveCredentialFile($, fresh)
   liveChangedAt = await $.clock.now()
   await update($, live, () => uuid)
-  await refreshLive($)
-
-  return m.switched(target.email)
 }
 
 async function remove($: EngineInterface, uuid: string): Promise<string> {
@@ -872,7 +885,13 @@ async function refreshAll($: EngineInterface, isAsked: boolean): Promise<void> {
     const liveUuid = await syncLive($)
     for (const account of await read($, accounts)) {
       try {
-        const reading = await readingFor($, account.uuid, liveUuid)
+        const reading = await exclusive(async () => {
+          // Whose login Claude Code uses now, read again for each account: a switch here or in another
+          // session may have made this one live since the lookup began, and the live login is never refreshed here.
+          const liveNow = (await liveOauthAccount($))?.accountUuid ?? liveUuid
+
+          return readingFor($, account.uuid, liveNow)
+        })
         await update($, usage, map => ({ ...map, [account.uuid]: reading }))
       } catch (error) {
         // Another session switched meanwhile: nothing is filed, and the next lookup reads the new login.
@@ -1220,7 +1239,9 @@ async function showTab($: EngineInterface, next: AccountsTabKey): Promise<void> 
  * account, then the footer below a blank line; or to `rows`, for a dialog
  * taller than that. With `focus` it takes the keys, and Esc asks it to close.
  */
-async function openPane($: EngineInterface, focus = false, rows?: number): Promise<void> {
+// The pane is opened only by what the person did (a command, a button, the band), so it takes the keyboard:
+// with no mouse, as off fullscreen mode, nothing else hands it the keys.
+async function openPane($: EngineInterface, focus = true, rows?: number): Promise<void> {
   // Five rows a card, and around the cards the header, the tab bar, its rule, the margins and the
   // footer; the Usage and Storage tabs take their figures and charts.
   const wanted = rows ?? ((await read($, tab)) !== 'accounts' ? USAGE_ROWS : Math.max(1, (await read($, accounts)).length) * 5 + ACCOUNTS_CHROME_ROWS)
@@ -1813,6 +1834,28 @@ export const register: Register = (on, options) => {
       )
     }
     // A removal in question.
+    const switching = asked?.kind === 'switch' ? (await read($, accounts)).find(one => one.uuid === asked.uuid) : undefined
+    if (switching) {
+      // Cancel holds the keyboard first: an Enter meant for the prompt never switches every session's login.
+      return Dialog(
+        ui,
+        bodyColumns,
+        header,
+        m.switchTitle(switching.email),
+        [{ text: m.switchHint, tone: 'muted' }],
+        {
+          label: m.switchButton,
+          onPress: act(async () => {
+            await dismiss()
+
+            return switchTo($, switching.uuid)
+          }),
+        },
+        { label: m.cancel, onPress: act(dismiss) },
+        await read($, focused),
+        'cancel',
+      )
+    }
     const target = asked?.kind === 'remove' ? (await read($, accounts)).find(one => one.uuid === asked.uuid) : undefined
     if (asked && target) {
 
@@ -1832,6 +1875,7 @@ export const register: Register = (on, options) => {
         },
         { label: m.cancel, onPress: act(dismiss) },
         await read($, focused),
+        'cancel',
       )
     }
 
@@ -1922,7 +1966,12 @@ export const register: Register = (on, options) => {
             bodyColumns,
           },
           {
-            switchTo: uuid => act(() => switchTo($, uuid))(),
+            // Switching changes every session's login, so it asks first, Cancel holding the keyboard.
+            switchTo: uuid =>
+              act(async () => {
+                await update($, dialog, () => ({ kind: 'switch', uuid }) as const)
+                await openPane($, true)
+              })(),
             remove: uuid =>
               act(async () => {
                 await update($, dialog, () => ({ kind: 'remove', uuid }) as const)

@@ -131,7 +131,7 @@ declare module 'claude-code' {
       /** accountUuid of the login Claude Code currently uses, or null. */
       live: string | null
       /** What the dialog shows: the account the remove dialog asks about, the webhook settings, or the Usage tab's period; null with none open. */
-      dialog: { kind: 'remove'; uuid: string } | { kind: 'webhook' } | { kind: 'period' } | { kind: 'cleanupDays' } | { kind: 'cleanup' } | null
+      dialog: { kind: 'remove'; uuid: string } | { kind: 'switch'; uuid: string } | { kind: 'webhook' } | { kind: 'period' } | { kind: 'cleanupDays' } | { kind: 'cleanup' } | null
       /**
        * The webhook settings being edited in the dialog, or null: `token` is a
        * new token typed (empty keeps the one kept), `hasToken` whether one is

@@ -98,7 +98,8 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
             <Box justifyContent="space-between">
               <Text>
                 {Toned(ui, `live-${one.uuid}`, isLive ? '● ' : '○ ', isLive ? 'accent' : undefined, { isDim: !isLive })}
-                <Text bold={isLive}>{one.email}</Text>
+                {/* The account in use reads in the colour of its Active badge. */}
+                {Toned(ui, `email-${one.uuid}`, one.email, isLive ? 'accent' : undefined, { isBold: isLive })}
                 {isLive && <Text> </Text>}
                 {isLive && Badge(ui, `active-${one.uuid}`, m.active)}
                 {reading?.isStale && Toned(ui, `stale-${one.uuid}`, ` ${STALE_MARK}`, 'stale', { isDim: true })}

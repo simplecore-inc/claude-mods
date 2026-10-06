@@ -85,6 +85,9 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     expect((await ui.find({ key: 'use-u2-tile' }))?.props).toMatchObject({ paddingX: 1, backgroundColor: '#1f4650' })
     expect((await ui.find({ key: 'remove-u2' }))?.text).toBe('✕')
     expect(await ui.find({ key: 'use-u1' })).toBeUndefined()
+    // The account in use reads in its Active badge's colour; the others in the plain one.
+    expect((await ui.findAll({ type: 'Text', text: 'mina@example.com' })).some(found => found.props.color === 'cyan' && found.props.bold === true)).toBe(true)
+    expect((await ui.findAll({ type: 'Text', text: 'jun@example.org' })).some(found => found.props.color !== undefined)).toBe(false)
     // The footer splits into equal filled tiles, one button in each; Close is in the header.
     expect(await ui.find({ key: 'tile-close' })).toBeUndefined()
     expect(await ui.find({ key: 'header-exit-ground' })).toBeDefined()
@@ -604,5 +607,32 @@ test('on the day a weekly window resets, its reset reads red; the five-hour wind
   const weekly = resets.find(found => /\(1h|\(2h/.test(found.text ?? ''))
   expect(weekly?.props).toMatchObject({ color: 'red', bold: true })
   expect(resets.filter(found => found.props.color === undefined && found.props.dimColor === true).length).toBeGreaterThan(0)
+  await ui.unmount()
+})
+
+test('Switch asks first, Cancel holding the keyboard, so a stray Enter never changes every session\'s login', async ($, on) => {
+  seedState(on, {})
+  const switched: unknown[] = []
+  on('process.run', ($, e) => {
+    switched.push(e.argv)
+    return { value: { exitCode: 1, stdout: '', stderr: '' } as never }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  const ui = await mountPane($, 'terminal')
+  await ui.press({ key: 'use-u2' })
+  await ui.unmount()
+  // The press leaves the dialog to draw and touches no login.
+  const after = await mountPane($, 'terminal')
+  expect(await after.find({ type: 'Text', text: 'Switch to jun@example.org?' })).toBeDefined()
+  expect(switched).toEqual([])
+  await after.unmount()
+})
+
+test('the switch dialog names the account and focuses Cancel first', async ($, on) => {
+  seedState(on, { dialog: { kind: 'switch', uuid: 'u2' } })
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'Switch to jun@example.org?' })).toBeDefined()
+  expect((await ui.find({ key: 'dialog-cancel' }))?.props.autoFocus).toBe(true)
+  expect((await ui.find({ key: 'dialog-confirm' }))?.props.autoFocus).toBeUndefined()
   await ui.unmount()
 })

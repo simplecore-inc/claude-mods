@@ -678,7 +678,8 @@ function scheduleLiveRefresh($: EngineInterface): void {
 
 async function openPane($: EngineInterface, next?: Tab): Promise<void> {
   if (next) await update($, tab, () => next)
-  await $.ui.open({ id: PANE, title: TAB_LABEL, rows: 30 })
+  // Opened only by what the person did, the pane takes the keyboard: with no mouse nothing else hands it the keys.
+  await $.ui.open({ id: PANE, title: TAB_LABEL, rows: 30, focus: true, closeOnEscape: true })
   if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
   const active = await read($, tab)
   if (active === 'checkpoints') await refreshSince($)
