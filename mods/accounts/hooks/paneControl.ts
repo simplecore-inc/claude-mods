@@ -395,9 +395,9 @@ let isClickHintShown = false
  * usage, this session's lines changed, and whether the pane is open. Run at
  * session start, and again after a /clear, whose new session starts with none.
  */
-export async function adoptSession(ctx: PaneContext, sessionId: string): Promise<void> {
+export async function adoptSession(ctx: PaneContext, sessionId: string, isCleared: boolean): Promise<void> {
   const { io } = ctx.accounts
-  await beginSession(ctx.status, sessionId)
+  await beginSession(ctx.status, sessionId, isCleared)
   resetFeed()
   // A template file still holding an earlier default sends what the default now sends.
   await upgradeTemplate(io).catch((error: unknown) => io.log(message(error)))

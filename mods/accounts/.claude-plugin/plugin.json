@@ -1,7 +1,7 @@
 {
   "name": "sc-accounts",
   "displayName": "SimpleCORE Accounts",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "MIT",
   "description": "Switch between saved Claude logins and watch every account's rate limits",
   "author": {

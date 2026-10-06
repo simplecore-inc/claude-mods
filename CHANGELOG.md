@@ -2,6 +2,15 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.6.2 (2026-10-06)
+
+### Accounts (`sc-accounts`)
+
+- The status band shows each session's own effort. A level another window saves with `/effort` is a default for new sessions and no longer changes, or flickers on, the band of a session already running.
+- `/effort <level>` shows on the band at once, before the next request; a level picked from `/effort`'s list shows once it is saved, or at the next request.
+- A session starts at the effort Claude Code settles from each settings file, the highest first, so a project's level outranks a per-model level in the user's settings as it does in Claude Code.
+- A reload and `/clear` keep the session's effort.
+
 ## 0.6.1 (2026-10-06)
 
 > [!IMPORTANT]

@@ -104,6 +104,9 @@ export type StatusInfo = {
   linesRemoved: number
 }
 
+/** A session's effort: a level, or null for a model that takes none. */
+export type SessionEffort = { level: string | null }
+
 /** One run of text in a band cell, in its own colours. */
 export type BandSpan = {
   text: string
@@ -154,6 +157,8 @@ declare module 'claude-code' {
       paneOpen: boolean
       /** The session's latest status, or null before the first read. */
       status: StatusInfo | null
+      /** The effort this session runs at, kept here so a reload keeps it; null before the session is taken up. */
+      sessionEffort: SessionEffort | null
       /** `$.clock.now()` of the pane's last tick, so the ages it shows move on while it is open. */
       tick: number
       /** The pane's tab on screen. */

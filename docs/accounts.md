@@ -122,7 +122,7 @@ The mod reads the status itself, so no status line command is needed, and the ro
 | Field | Read from |
 | --- | --- |
 | Model | the session's model |
-| Effort | the effort of each main-loop request; before the first, the model's `effortLevel` in `modelSettings`, else `effortLevel` |
+| Effort | this session's own: the level its `/effort` names, as it runs, and the effort of each main-loop request (a subagent's are left out). When the session starts, the level its settings give the model, as Claude Code settles it from each settings file; `/effort` picked from its list shows once it saves the level, or at the next request. A level another window saves is a default for new sessions and changes no other session's band. A reload and `/clear` keep it |
 | Fast mode | the `fastMode` setting |
 | ULTRACODE | the session's transcript, where each switch is recorded; only what was appended since the last read is scanned. It needs a POSIX shell (`sh`, `head`, `tail`, `grep`, `awk`), which Windows has only with Git Bash or WSL; without one, ULTRACODE is not shown |
 | Task | the in-progress item of the session's newest todo list (`todos/` under Claude Code's config directory) |

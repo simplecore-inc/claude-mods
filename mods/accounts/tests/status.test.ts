@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { StatusCollector } from '../hooks/collector'
 import { projectFolder, transcriptPath } from '../hooks/shared/claude'
 import type { CollectorIo } from '../hooks/collector'
-import { displayModel, editedPath, inProgressTask, lineChanges, parsePr, settledEffort, todoFilesOf, ultracodeAfter } from '../hooks/status'
+import { displayModel, editedPath, inProgressTask, lineChanges, parsePr, savedModelEffort, startingEffort, todoFilesOf, ultracodeAfter } from '../hooks/status'
 
 test('a model id reads as Claude Code names it on screen', async () => {
   expect(displayModel('claude-opus-5-5')).toBe('Opus 5.5')
@@ -53,8 +53,24 @@ test('the in-progress task, the session\'s newest todo list, the PR and the sett
   expect(parsePr('{"number":12,"reviewDecision":"APPROVED"}')).toEqual({ number: 12, reviewState: 'approved' })
   expect(parsePr('{"number":12,"reviewDecision":"REVIEW_REQUIRED"}')).toEqual({ number: 12, reviewState: null })
   expect(parsePr('no pull requests found')).toBeNull()
-  expect(settledEffort({ effortLevel: 'xhigh', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }, 'claude-opus-5-5')).toBe('high')
-  expect(settledEffort({ effortLevel: 'xhigh' }, 'claude-sonnet-5-5')).toBe('xhigh')
+})
+
+test('a session starts at the effort Claude Code settles from its settings sources, the highest first', async () => {
+  const user = { effortLevel: 'xhigh', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
+  // The user's level for the model, over the user's level for every model.
+  expect(startingEffort({ user }, 'claude-opus-5-5')).toBe('high')
+  expect(startingEffort({ user }, 'claude-opus-5-5[1m]')).toBe('high')
+  expect(startingEffort({ user }, 'claude-sonnet-5-5')).toBe('xhigh')
+  // A higher source's level for every model, over a lower source's level for the model.
+  expect(startingEffort({ user, local: { effortLevel: 'low' } }, 'claude-opus-5-5')).toBe('low')
+  // A higher source's level for the model, over its own and lower levels for every model.
+  expect(startingEffort({ user, project: { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'low' } } } }, 'claude-opus-5-5')).toBe('low')
+  // A level no file can hold, or none at all: the model's own default, which no setting says.
+  expect(startingEffort({ user: { modelSettings: { 'claude-opus-5-5': { effortLevel: 'max' } } } }, 'claude-opus-5-5')).toBeNull()
+  expect(startingEffort({ user: {}, project: {} }, 'claude-opus-5-5')).toBeNull()
+  // `/effort` saves under the model in the user's settings.
+  expect(savedModelEffort(user, 'claude-opus-5-5')).toBe('high')
+  expect(savedModelEffort(user, 'claude-sonnet-5-5')).toBeNull()
 })
 
 test('the transcript sits in the project folder Claude Code names after the root, under its config directory', async () => {

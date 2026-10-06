@@ -257,9 +257,16 @@ test('each session keeps its lines changed under a key of its own; a week-old co
   machine.store['lines:old'] = { added: 1, removed: 1, at: machine.now() - 8 * 24 * 3_600_000 }
   machine.store['lines:other'] = { added: 4, removed: 0, at: machine.now() - 60_000 }
   machine.store.lines = { s1: { added: 2, removed: 1, at: machine.now() - 60_000 } }
-  const ctx = { accounts: { io: machine.io } } as unknown as StatusContext
+  let effort: { level: string | null } | null = null
+  const ctx = {
+    accounts: { io: machine.io },
+    model: async () => 'claude-opus-5-5',
+    settings: async () => ({}),
+    settingsOf: async () => ({}),
+    sessionEffort: { get: async () => effort, set: async (value: { level: string | null } | null) => void (effort = value) },
+  } as unknown as StatusContext
   // The count kept in the old shared map is taken up.
-  await beginSession(ctx, 's1')
+  await beginSession(ctx, 's1', false)
   await countLines(ctx, { added: 3, removed: 0 })
   expect(machine.store['lines:s1']).toMatchObject({ added: 5, removed: 1 })
   expect(machine.store['lines:other']).toMatchObject({ added: 4 })

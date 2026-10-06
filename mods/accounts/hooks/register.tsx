@@ -16,10 +16,11 @@ import { message } from './io'
 import { adoptMeasured, pollLive } from './lookups'
 import { adoptSession, answerCommand, openPane, paneActions, paneModel, refresh, syncPaneOpen, toggle } from './paneControl'
 import type { PaneContext } from './paneControl'
-import { collectStatus, countLines, noteRequestEffort, startStatus } from './sessionStatus'
+import { collectStatus, countLines, noteEffortCommand, noteRequestEffort, startStatus } from './sessionStatus'
 import type { StatusContext } from './sessionStatus'
 import { isBesideOtherPanes } from './shared/panes'
 import { editedPath, lineChanges } from './status'
+import type { EffortSettings } from './status'
 import { StatusBand, toolboxCell } from './views/band'
 import { AccountsPane } from './views/pane'
 
@@ -31,6 +32,7 @@ const focused = atom({ plugin: 'sc-accounts', key: 'focused' } as const, null)
 const isRefreshing = atom({ plugin: 'sc-accounts', key: 'isRefreshing' } as const, false)
 const isGuideOpen = atom({ plugin: 'sc-accounts', key: 'isGuideOpen' } as const, false)
 const statusInfo = atom({ plugin: 'sc-accounts', key: 'status' } as const, null)
+const sessionEffort = atom({ plugin: 'sc-accounts', key: 'sessionEffort' } as const, null)
 const tick = atom({ plugin: 'sc-accounts', key: 'tick' } as const, 0)
 const webhookDraft = atom({ plugin: 'sc-accounts', key: 'webhookDraft' } as const, null)
 const webhookLast = atom({ plugin: 'sc-accounts', key: 'webhookLast' } as const, null)
@@ -209,8 +211,10 @@ function statusContext($: EngineInterface): StatusContext {
     cwd: () => $.session.cwd(),
     model: () => $.session.model(),
     usage: () => $.session.usage(),
-    settings: async () => (await $.settings.read()) as { effortLevel?: unknown; modelSettings?: unknown; fastMode?: unknown },
+    settings: async () => (await $.settings.read()) as { fastMode?: unknown },
+    settingsOf: async source => (await $.settings.read({ source })) as EffortSettings,
     status: { get: () => read($, statusInfo), set: async next => void (await update($, statusInfo, () => next)) },
+    sessionEffort: { get: () => read($, sessionEffort), set: async next => void (await update($, sessionEffort, () => next)) },
     turnStartedAt: () => turnStartedAt,
   }
 }
@@ -320,7 +324,7 @@ export const register: Register = (on, options) => {
       { configPath: await claudeDirectory(io), sessionRoot: await $.session.root() },
     )
     sessionId = await $.session.id()
-    await adoptSession(paneContext($), sessionId)
+    await adoptSession(paneContext($), sessionId, false)
     $.clock.every(STATUS_POLL_MS, () => {
       void collectStatus(statusContext($)).catch((error: unknown) => debugLog($, error))
     })
@@ -354,7 +358,7 @@ export const register: Register = (on, options) => {
       $.clock.after(CLEAR_SETTLE_MS, () => {
         void (async () => {
           sessionId = await $.session.id()
-          await adoptSession(paneContext($), sessionId)
+          await adoptSession(paneContext($), sessionId, true)
         })().catch((error: unknown) => debugLog($, error))
       })
     }
@@ -370,9 +374,18 @@ export const register: Register = (on, options) => {
 
   // The effort each main-loop request asks for, as the engine settled it (a subagent's are its own).
   on('turn.step', async function* ($, e, next) {
-    if (!e.agentId) noteRequestEffort(e.effort === undefined ? null : String(e.effort))
+    if (!e.agentId) await noteRequestEffort(statusContext($), e.effort).catch((error: unknown) => debugLog($, error))
 
     return yield* next(e)
+  })
+
+  // This session's `/effort`: the level it names shows at once, a default picked from its list once saved.
+  on('command.run', { command: 'effort' }, async ($, e, next) => {
+    const userBefore = (await $.settings.read({ source: 'user' })) as EffortSettings
+    const result = await next(e)
+    await noteEffortCommand(statusContext($), e.args, userBefore).catch((error: unknown) => debugLog($, error))
+
+    return result
   })
 
   // Lines a file-changing tool call adds and removes: the file before and after, compared.

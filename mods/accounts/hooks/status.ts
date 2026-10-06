@@ -107,10 +107,46 @@ export function parsePr(text: string): { number: number; reviewState: string | n
   }
 }
 
-/** The effort a session uses before any request says: the model's own setting, else the session-wide one. */
-export function settledEffort(settings: { effortLevel?: unknown; modelSettings?: unknown }, modelId: string): string | null {
-  const perModel = (settings.modelSettings as Record<string, { effortLevel?: unknown }> | undefined)?.[modelId.replace(/\[1m\]$/, '')]
-  const level = perModel?.effortLevel ?? settings.effortLevel
+/** The effort keys of one settings source. */
+export type EffortSettings = { effortLevel?: unknown; modelSettings?: unknown }
 
-  return typeof level === 'string' ? level : null
+/** The settings sources, the one that wins first. */
+const SOURCES_FIRST_WINS = ['policy', 'flag', 'local', 'project', 'user'] as const
+
+/** The levels a settings file can hold; `max` is kept to a session and never saved. */
+const SAVED_LEVELS = new Set(['low', 'medium', 'high', 'xhigh'])
+
+function savedLevel(value: unknown): string | null {
+  return typeof value === 'string' && SAVED_LEVELS.has(value) ? value : null
+}
+
+/** The `modelSettings.<model>.effortLevel` of one source, as given: undefined when the source names none. */
+function modelLevel(settings: EffortSettings, modelId: string): unknown {
+  const models = settings.modelSettings as Record<string, { effortLevel?: unknown } | undefined> | undefined
+
+  return models?.[modelId.replace(/\[1m\]$/, '')]?.effortLevel
+}
+
+/**
+ * The effort a session starts at, from each settings source as Claude Code
+ * reads them: the first source, the highest first, that names a level for the
+ * model or one for every model wins; the user's level for every model counts
+ * only where no other source names one. None means the model's own default,
+ * which no setting says.
+ */
+export function startingEffort(sources: Partial<Record<(typeof SOURCES_FIRST_WINS)[number], EffortSettings>>, modelId: string): string | null {
+  for (const source of SOURCES_FIRST_WINS) {
+    const settings = sources[source]
+    if (!settings) continue
+    const perModel = modelLevel(settings, modelId)
+    if (perModel !== undefined) return savedLevel(perModel)
+    if (source !== 'user' && settings.effortLevel !== undefined) return savedLevel(settings.effortLevel)
+  }
+
+  return savedLevel(sources.user?.effortLevel)
+}
+
+/** The level `/effort` saved for the model, where it saves one: the user's settings, under the model. */
+export function savedModelEffort(user: EffortSettings, modelId: string): string | null {
+  return savedLevel(modelLevel(user, modelId))
 }
