@@ -2,10 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentActivity, AgentRow, CheckpointRow, DiffPoint, DiffView, MemoryFile, MemoryKind, MemoryScope, Note, Tab, WorktreeRow } from '../types'
-import { frontmatterOf, importsOf, markdownPages, outlineOf, pageOfLine, reflow, searchMemory } from './memory'
+import { claudeFiles, frontmatterOf, importsOf, isPathRule, markdownPages, outlineOf, pageOfLine, reflow, searchMemory } from './memory'
 import { MemoryTab } from './views/memory'
 import { projectFolder } from './shared/claude'
-import { checkpointRef, clipDiff, finishAgents, keptCheckpoints, mergeCheckpoints, promptLabel, shortPath } from './git'
+import { checkpointRef, clipDiff, diffPages, finishAgents, keptCheckpoints, promptLabel, shortPath } from './git'
+import { adoptStored, changeList, listPaths, readList } from './lists'
+import type { ListFiles } from './lists'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
 import { isBesideOtherPanes } from './shared/panes'
@@ -133,8 +135,6 @@ let sessionId = ''
 let baseline: CheckpointRow | undefined
 /** This session's snapshot index under the git directory, set as the session starts. */
 let snapshotIndex = ''
-/** Snapshots run one at a time: two at once in one index would trip git's index lock. */
-let snapshotChain: Promise<unknown> = Promise.resolve()
 /** When this session first saw each agent, for its elapsed time. */
 const firstSeen = new Map<string, number>()
 
@@ -151,20 +151,53 @@ function runner($: EngineInterface): Run {
   return (argv, init) => $.process.run(argv, init)
 }
 
-/** A snapshot of the working tree, queued behind any snapshot this session is already taking. */
-function snapshot($: EngineInterface): Promise<string> {
-  const next = snapshotChain.then(() => {
-    if (!root) throw new Error(m.checkpointsNeedGit)
+/** A snapshot of the working tree in this session's own index, after any snapshot already taken in it. */
+async function snapshot($: EngineInterface): Promise<string> {
+  if (!root) throw new Error(m.checkpointsNeedGit)
 
-    return snapshotTree(runner($), root, snapshotIndex)
-  })
-  snapshotChain = next.catch(() => undefined)
-
-  return next
+  return snapshotTree(runner($), root, snapshotIndex)
 }
 
+/**
+ * This session's snapshot index in each other worktree it may have shown the
+ * changes of: deleted with its own when the session ends. Read from the
+ * worktrees listed, so a reload of the plugin between leaves none behind.
+ */
+async function otherSnapshotIndexes($: EngineInterface): Promise<string[]> {
+  const run = runner($)
+  const found: string[] = []
+  for (const row of await read($, worktrees)) {
+    if (row.path === root) continue
+    const path = await snapshotIndexPath(run, row.path, sessionId).catch((error: unknown) => {
+      debug($, error)
+
+      return ''
+    })
+    if (path !== '') found.push(path)
+  }
+
+  return found
+}
+
+/** The plugin store's keys for a project's lists, from before they were files: read once, to move them. */
 const checkpointsKey = (project: string) => `checkpoints:${project}`
 const notesKey = (project: string) => `notes:${project}`
+
+/** The files of this working tree's notes and checkpoint list; undefined outside a repository. */
+let lists: { notes: string; checkpoints: string } | undefined
+
+/** The file calls the lists are kept through, over `$.fs`. */
+function listFiles($: EngineInterface): ListFiles {
+  return {
+    exists: path => $.fs.exists(path),
+    read: async path => {
+      const text = await $.fs.read(path)
+
+      return typeof text === 'string' ? text : ''
+    },
+    write: (path, text) => $.fs.write(path, text),
+  }
+}
 
 function tabLabel(key: Tab): string {
   return { agents: m.tabAgents, checkpoints: m.tabCheckpoints, notes: m.tabNotes, diff: m.tabDiff, memory: m.tabMemory }[key]
@@ -198,7 +231,7 @@ async function refreshAgents($: EngineInterface): Promise<void> {
 
     return {
       id: agent.id,
-      stopId: agent.name ?? agent.teammateId ?? agent.id,
+      stopIds: [...new Set([agent.id, agent.name, agent.teammateId].filter((one): one is string => typeof one === 'string' && one !== ''))],
       label: agent.name ?? agent.description,
       type: agent.type,
       status: agent.status,
@@ -236,11 +269,24 @@ async function refreshWorktrees($: EngineInterface): Promise<void> {
   if (JSON.stringify(current) !== JSON.stringify(rows)) await update($, worktrees, () => rows)
 }
 
+/**
+ * Stops an agent through Claude Code's TaskStop, by its id first and then by
+ * the other names TaskStop takes. A refusal (the person's, a hook's) is said
+ * at once and not asked again; a stop no name reaches says why.
+ */
 async function stopAgent($: EngineInterface, agent: AgentRow): Promise<string> {
-  await $.tool.call({ tool: 'TaskStop', task_id: agent.stopId })
-  await refreshAgents($)
-
-  return m.stopped(agent.label)
+  let reason = ''
+  try {
+    for (const taskId of agent.stopIds) {
+      const result = await $.tool.call({ tool: 'TaskStop', task_id: taskId })
+      if (result.deny !== undefined) throw new Error(m.stopFailed(agent.label, result.deny))
+      if (result.isError !== true) return m.stopped(agent.label)
+      reason = result.text ?? reason
+    }
+    throw new Error(m.stopFailed(agent.label, reason))
+  } finally {
+    await refreshAgents($)
+  }
 }
 
 async function dropWorktree($: EngineInterface, row: WorktreeRow): Promise<string> {
@@ -254,89 +300,119 @@ async function dropWorktree($: EngineInterface, row: WorktreeRow): Promise<strin
 // ── checkpoints ───────────────────────────────────────────────────────────
 
 /**
- * Keeps the checkpoints in the store with what changed since each as last
- * counted, so a reload or a new session shows the counts at once; the next
- * count replaces them.
+ * Changes the checkpoint list as its file holds it now and shows the result,
+ * with what changed since each as last counted, so a reload or a new session
+ * shows the counts at once. Never a list read earlier: that would write over
+ * a row another session added or a press made since.
  */
-async function saveCheckpoints($: EngineInterface, list: CheckpointRow[]): Promise<void> {
-  if (!root) return
-  await $.store.set(checkpointsKey(root), list)
+async function changeCheckpoints($: EngineInterface, change: (list: CheckpointRow[]) => CheckpointRow[]): Promise<CheckpointRow[]> {
+  if (!lists) return read($, checkpoints)
+  const list = await changeList<CheckpointRow>(listFiles($), lists.checkpoints, change)
   await update($, checkpoints, () => list)
+
+  return list
 }
 
+/** The checkpoint being taken, which the next waits for: two at once would number themselves alike. */
+let checkpointTaking: Promise<unknown> = Promise.resolve()
+
 /**
- * Takes a checkpoint unless nothing changed since the latest one (or `force`).
+ * Takes a checkpoint unless nothing changed since the latest one (or `force`),
+ * one at a time.
  * @returns the checkpoint taken, or null when there was nothing new
  */
-async function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], label: string, force = false): Promise<CheckpointRow | null> {
-  if (!root) return null
+function takeCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], label: string, force = false): Promise<CheckpointRow | null> {
+  const taking = checkpointTaking.then(() => takeOneCheckpoint($, kind, label, force))
+  checkpointTaking = taking.catch(() => undefined)
+
+  return taking
+}
+
+async function takeOneCheckpoint($: EngineInterface, kind: CheckpointRow['kind'], label: string, force: boolean): Promise<CheckpointRow | null> {
+  if (!root || !lists) return null
   const run = runner($)
   const tree = await snapshot($)
-  // Another session of this project may have added rows since this one read them: those are kept.
-  const stored = await $.store.get(checkpointsKey(root))
-  const list = mergeCheckpoints(await read($, checkpoints), Array.isArray(stored) ? (stored as CheckpointRow[]) : [])
+  const list = await readList<CheckpointRow>(listFiles($), lists.checkpoints)
   if (!force && list[0]?.tree === tree) return null
+  // This session's rows are written by it alone, one at a time: the next number is free.
   const own = list.filter(row => row.ref.includes(`/${sessionId}/`))
   const seq = own.reduce((max, row) => Math.max(max, Number(row.ref.split('/').pop()) || 0), 0) + 1
   const ref = checkpointRef(sessionId, seq)
   const { commit } = await createCheckpoint(run, root, ref, label || m.checkpointKind[kind], tree)
   const row: CheckpointRow = { ref, commit, tree, at: await $.clock.now(), label, kind, since: { files: 0, added: 0, removed: 0 } }
   // Pinned checkpoints are kept whatever their age, and this session's start, the Diff tab's
-  // default base; the newest 50 others besides.
-  const { kept, gone } = keptCheckpoints([row, ...list], CHECKPOINTS_KEPT, baseline ? [baseline.ref] : [])
+  // default base; the newest 50 others besides. Rows another session wrote meanwhile stay.
+  let gone: CheckpointRow[] = []
+  await changeCheckpoints($, current => {
+    const all = [row, ...current.filter(one => one.ref !== ref)].sort((a, b) => b.at - a.at)
+    const result = keptCheckpoints(all, CHECKPOINTS_KEPT, baseline ? [baseline.ref] : [])
+    gone = result.gone
+
+    return result.kept
+  })
   for (const old of gone) {
     await deleteRef(run, root, old.ref).catch((error: unknown) => debug($, error))
   }
-  await saveCheckpoints($, kept)
 
   return row
 }
+
+/** The working tree and the checkpoints last counted against it: while both stay, so do the counts. */
+let lastCounted = ''
 
 /**
  * Counts what changed since each checkpoint shown against the working tree now,
  * and since the session's start, which the base dialog offers even past them.
  */
 async function refreshSince($: EngineInterface): Promise<void> {
-  if (!root) return
+  if (!root || !lists) return
   const run = runner($)
   const tree = await snapshot($)
   const list = await read($, checkpoints)
   const shown = list.slice(0, CHECKPOINTS_SHOWN)
   const start = list.find(row => row.ref === baseline?.ref) ?? list.find(row => row.kind === 'session')
   if (start && !shown.includes(start)) shown.push(start)
+  const counting = [tree, ...shown.map(row => row.commit)].join(' ')
+  if (counting === lastCounted && shown.every(row => row.since !== undefined)) return
   const counted = new Map<string, CheckpointRow['since']>()
   for (const row of shown) counted.set(row.ref, await diffSummary(run, root, row.commit, tree))
-  // Merged by ref into the list as it stands now: a checkpoint taken while these were counted stays.
+  lastCounted = counting
   const changed = list.some(row => counted.has(row.ref) && JSON.stringify(counted.get(row.ref)) !== JSON.stringify(row.since))
   if (!changed) return
-  const merged = await update($, checkpoints, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
-  await $.store.set(checkpointsKey(root), merged)
+  // Applied by ref to the list as its file holds it now: a checkpoint taken while these were counted stays.
+  await changeCheckpoints($, current => current.map(row => (counted.has(row.ref) ? { ...row, since: counted.get(row.ref) } : row)))
 }
 
-/** Pins a checkpoint, or unpins it: a pinned one is never deleted to make room. */
-async function togglePin($: EngineInterface, ref: string): Promise<string> {
-  const list = await read($, checkpoints)
-  const row = list.find(one => one.ref === ref)
-  if (!row) return m.checkpointsEmpty
-  await saveCheckpoints($, list.map(one => (one.ref === ref ? { ...one, isPinned: !one.isPinned } : one)))
+/** Pins a checkpoint (`isPinned`), or unpins it: a pinned one is never deleted to make room. */
+async function setPin($: EngineInterface, ref: string, isPinned: boolean): Promise<string> {
+  let isFound = false
+  await changeCheckpoints($, list =>
+    list.map(one => {
+      if (one.ref !== ref) return one
+      isFound = true
 
-  return row.isPinned ? m.unpinned : m.pinned
+      return { ...one, isPinned }
+    }),
+  )
+  if (!isFound) return m.checkpointsEmpty
+
+  return isPinned ? m.pinned : m.unpinned
 }
 
 /** Names a checkpoint and pins it; an empty name takes the name away and leaves the pin. */
 async function nameCheckpoint($: EngineInterface, ref: string, name: string): Promise<string | void> {
   const clean = name.replace(/\s+/g, ' ').trim()
-  const list = await read($, checkpoints)
-  if (!list.some(one => one.ref === ref)) return m.checkpointsEmpty
-  await saveCheckpoints(
-    $,
+  let isFound = false
+  await changeCheckpoints($, list =>
     list.map(one => {
       if (one.ref !== ref) return one
+      isFound = true
       const { name: _old, ...rest } = one
 
       return clean ? { ...rest, name: clean, isPinned: true } : rest
     }),
   )
+  if (!isFound) return m.checkpointsEmpty
 
   return clean ? m.named(clean) : undefined
 }
@@ -391,12 +467,13 @@ async function openWorktreeDiff($: EngineInterface, row: WorktreeRow): Promise<v
   const run = runner($)
   const commit = await mergeBase(run, root, main, row.branch)
   const files = await diffFiles(run, root, commit, await worktreeTree($, row.path))
+  const at = await $.clock.now()
   await update($, tab, () => 'diff')
   await update($, diff, () => ({
     base: { commit, label: main, at: 0, isSessionStart: false },
     worktree: { path: row.path, branch: row.branch ?? '' },
     files,
-    at: Date.now(),
+    at,
   }))
 }
 
@@ -441,7 +518,10 @@ async function refreshDiff($: EngineInterface, base?: DiffPoint, target?: DiffPo
     current.target?.commit === to?.commit &&
     JSON.stringify(current.files) === JSON.stringify(files) &&
     JSON.stringify(current.selected) === JSON.stringify(selected)
-  if (!isSame) await update($, diff, () => ({ base: from, target: to, files, selected, at: Date.now() }))
+  if (!isSame) {
+    const at = await $.clock.now()
+    await update($, diff, () => ({ base: from, target: to, files, selected, at }))
+  }
 }
 
 /** Opens a file's diff in its dialog, on its first page: however long the file list, the diff is never below it. */
@@ -545,12 +625,12 @@ async function loadMemory($: EngineInterface): Promise<void> {
     memoryTexts.set(path, text)
     const front = frontmatterOf(text)
     // A rule with `paths` in its frontmatter loads only when Claude works on a file it matches.
-    const isPathRule = kind === 'rule' && /^---\r?\n[\s\S]*?^paths\s*:/m.test(text)
+    const isForMatching = kind === 'rule' && isPathRule(text)
     files.push({
       path,
       display: memoryDisplay(path, project),
       scope,
-      kind: isPathRule ? 'pathRule' : kind,
+      kind: isForMatching ? 'pathRule' : kind,
       bytes: new TextEncoder().encode(text).length,
       lines: text.split(/\r?\n/).length,
       outline: outlineOf(text),
@@ -578,12 +658,13 @@ async function loadMemory($: EngineInterface): Promise<void> {
   if (!hasInstructions) await add(`${cwd}/AGENTS.md`, 'project', 'agents')
   // A subfolder's CLAUDE.md loads when Claude reads files in that folder.
   if (root) {
-    const listed = await run(['git', 'ls-files', '-co', '--exclude-standard'], { cwd: root, timeoutMs: 30_000 })
+    // Only those files are asked for, NUL-separated: the list stays short in any repository, and a Korean folder's name is as it is.
+    const listed = await run(['git', 'ls-files', '-z', '-co', '--exclude-standard', '--', ':(glob)**/CLAUDE.md', ':(glob)**/CLAUDE.local.md'], {
+      cwd: root,
+      timeoutMs: 30_000,
+    })
     if (listed.exitCode === 0) {
-      for (const relative of listed.stdout.split('\n')) {
-        if (!/(^|\/)CLAUDE(\.local)?\.md$/.test(relative)) continue
-        await add(`${root}/${relative}`, 'project', 'subfolder')
-      }
+      for (const relative of claudeFiles(listed.stdout)) await add(`${root}/${relative}`, 'project', 'subfolder')
     }
   }
   // Auto memory is kept per git repository, so every worktree of one shares it.
@@ -605,46 +686,51 @@ async function loadMemory($: EngineInterface): Promise<void> {
 
 // ── notes ─────────────────────────────────────────────────────────────────
 
-async function saveNotes($: EngineInterface, list: Note[]): Promise<void> {
-  if (root) await $.store.set(notesKey(root), list)
+/**
+ * Changes the project's notes as their file holds them now, each numbered,
+ * and shows the result. Never a list read earlier: that would write over a
+ * note another session added or a press made since. Outside a repository
+ * the notes live in the session alone.
+ */
+async function changeNotes($: EngineInterface, change: (list: Note[]) => Note[]): Promise<Note[]> {
+  if (!lists) return update($, notes, list => change(numbered(list)))
+  const list = await changeList<Note>(listFiles($), lists.notes, stored => change(numbered(stored)))
   await update($, notes, () => list)
+
+  return list
 }
 
 async function addNote($: EngineInterface, text: string): Promise<string | void> {
   const clean = text.trim()
   if (!clean) return
-  const list = await read($, notes)
-  const note: Note = { id: crypto.randomUUID(), text: clean, isDone: false, at: await $.clock.now(), seq: nextSeq(list) }
-  await saveNotes($, [note, ...list])
+  const at = await $.clock.now()
+  await changeNotes($, list => [{ id: crypto.randomUUID(), text: clean, isDone: false, at, seq: nextSeq(list) }, ...list])
 
   return m.noteAdded(clean.length > 40 ? `${clean.slice(0, 39)}…` : clean)
 }
 
-/** Takes the project's notes as the store holds them, so a note another session wrote shows here. */
-async function reloadNotes($: EngineInterface): Promise<void> {
-  if (!root) return
-  const stored = await $.store.get(notesKey(root))
-  const list = numberedNotes(stored)
-  // A note made before numbering gets its number once, in the store too, so it keeps it.
-  if (JSON.stringify(list) !== JSON.stringify(stored)) await $.store.set(notesKey(root), list)
-  if (JSON.stringify(list) !== JSON.stringify(await read($, notes))) await update($, notes, () => list)
+/** Marks a note done, or open again: what the person saw it as, turned over. */
+function setNoteDone($: EngineInterface, id: string, isDone: boolean): Promise<Note[]> {
+  return changeNotes($, list => list.map(one => (one.id === id ? { ...one, isDone, isSuggestedDone: false } : one)))
 }
 
-/** The stored notes, each with its number. */
-function numberedNotes(stored: unknown): Note[] {
-  return numbered(Array.isArray(stored) ? (stored as Note[]) : [])
+/** Takes the project's notes as their file holds them, so a note another session wrote shows here. */
+async function reloadNotes($: EngineInterface): Promise<void> {
+  if (!lists) return
+  const stored = await readList<Note>(listFiles($), lists.notes)
+  const list = numbered(stored)
+  // A note made before numbering gets its number once, in the file too, so it keeps it.
+  if (JSON.stringify(list) !== JSON.stringify(stored)) await changeNotes($, current => current)
+  else if (JSON.stringify(list) !== JSON.stringify(await read($, notes))) await update($, notes, () => list)
 }
 
 /** Marks the notes an answer says it finished, for the person to confirm. */
 async function suggestDone($: EngineInterface, answer: string): Promise<void> {
   const marked = new Set(doneMarks(answer))
   if (marked.size === 0) return
-  const list = await read($, notes)
-  if (!list.some(note => !note.isDone && note.seq !== undefined && marked.has(note.seq))) return
-  await saveNotes(
-    $,
-    list.map(note => (!note.isDone && note.seq !== undefined && marked.has(note.seq) ? { ...note, isSuggestedDone: true } : note)),
-  )
+  const isMarked = (note: Note) => !note.isDone && note.seq !== undefined && marked.has(note.seq)
+  if (!(await read($, notes)).some(isMarked)) return
+  await changeNotes($, list => list.map(note => (isMarked(note) ? { ...note, isSuggestedDone: true } : note)))
 }
 
 /** Whether a refresh of the visible tab is running: a second one asked meanwhile is dropped. */
@@ -652,7 +738,12 @@ let isLiveRefreshing = false
 /** The pending refresh after a burst of file-changing tool calls. */
 let liveRefreshTimer: { cancel: () => void } | undefined
 
-/** Brings the tab on screen up to date with the working tree and the store, when the pane is open. */
+/**
+ * Brings the tab on screen up to date with the working tree and the notes'
+ * file, when the pane is open. The Memory tab is read when it opens and when
+ * Refresh is pressed: reading every memory file and listing the repository's
+ * on each beat costs a large repository more than its few changes are worth.
+ */
 async function refreshVisible($: EngineInterface): Promise<void> {
   if (isLiveRefreshing || !(await isPaneOpen($))) return
   isLiveRefreshing = true
@@ -661,7 +752,6 @@ async function refreshVisible($: EngineInterface): Promise<void> {
     if (active === 'checkpoints') await refreshSince($)
     if (active === 'diff') await refreshDiff($)
     if (active === 'notes') await reloadNotes($)
-    if (active === 'memory') await loadMemory($)
   } finally {
     isLiveRefreshing = false
   }
@@ -678,6 +768,11 @@ function scheduleLiveRefresh($: EngineInterface): void {
 
 async function openPane($: EngineInterface, next?: Tab): Promise<void> {
   if (next) await update($, tab, () => next)
+  // Opened to show a tab: a dialog left from a draw the engine refused, or from a closed pane, goes.
+  if ((await read($, dialog)) !== null) {
+    await update($, dialog, () => null)
+    await update($, focused, () => null)
+  }
   // Opened only by what the person did, the pane takes the keyboard: with no mouse nothing else hands it the keys.
   await $.ui.open({ id: PANE, title: TAB_LABEL, rows: 30, focus: true, closeOnEscape: true })
   if (!(await read($, paneOpen))) await update($, paneOpen, () => true)
@@ -709,6 +804,14 @@ async function togglePane($: EngineInterface, next?: Tab): Promise<string> {
   return m.paneOpened(tabLabel(next ?? (await read($, tab))))
 }
 
+/** The files of a working tree's lists, under its repository's git folder; undefined when git cannot say where that is. */
+async function listPathsOf($: EngineInterface, top: string): Promise<{ notes: string; checkpoints: string } | undefined> {
+  const common = await $.process.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: top })
+  if (common.exitCode !== 0 || common.stdout.trim() === '') return undefined
+
+  return listPaths(common.stdout.trim().replaceAll('\\', '/'), top)
+}
+
 /**
  * Fills the state a session draws from: its id and snapshot index, the
  * project's notes and checkpoints, a checkpoint of the session's start, and
@@ -721,10 +824,21 @@ async function adoptSession($: EngineInterface): Promise<void> {
   snapshotIndex = root ? await snapshotIndexPath(runner($), root, sessionId) : ''
   await update($, repoError, () => (root ? null : m.checkpointsNeedGit))
   await update($, diff, () => null)
-  if (root) {
+  lists = root ? await listPathsOf($, root) : undefined
+  if (root && lists) {
+    // Lists the plugin store held, from before they were files, move to their files once.
+    for (const [key, path] of [
+      [notesKey(root), lists.notes],
+      [checkpointsKey(root), lists.checkpoints],
+    ] as const) {
+      const stored = await $.store.get(key)
+      if (stored === undefined) continue
+      await adoptStored(listFiles($), path, stored)
+      await $.store.delete(key)
+    }
     await reloadNotes($)
-    const storedCheckpoints = await $.store.get(checkpointsKey(root))
-    await update($, checkpoints, () => (Array.isArray(storedCheckpoints) ? (storedCheckpoints as CheckpointRow[]) : []))
+    const kept = await readList<CheckpointRow>(listFiles($), lists.checkpoints)
+    await update($, checkpoints, () => kept)
     // A reload runs this again in the same session: its start is the checkpoint already taken, never a new one.
     const started = (await read($, checkpoints)).find(row => row.kind === 'session' && row.ref.includes(`/${sessionId}/`))
     try {
@@ -831,7 +945,9 @@ async function dialogSpec(
       title: m.noteDeleteTitle,
       lines: [{ text: `“${note.text}”` }, { text: m.cannotUndo, tone: 'muted' }],
       confirm: m.deleteConfirm,
-      run: async () => saveNotes($, (await read($, notes)).filter(one => one.id !== note.id)),
+      run: async () => {
+        await changeNotes($, list => list.filter(one => one.id !== note.id))
+      },
     }
   }
   if (asked.kind === 'stop') {
@@ -876,6 +992,8 @@ export const register: Register = (on, options) => {
       if (pane.id !== PANE) await $.ui.close({ id: pane.id }).catch((error: unknown) => debug($, error))
     }
     await adoptSession($)
+    // Read at once, not at the first poll: a row a reload left in an earlier shape is replaced before it is pressed.
+    await refreshAgents($).catch((error: unknown) => debug($, error))
     $.clock.every(AGENTS_POLL_MS, () => void refreshAgents($).catch((error: unknown) => debug($, error)))
     // Edits made outside the session (an editor, a script) show within a few seconds too.
     $.clock.every(LIVE_POLL_MS, () => {
@@ -906,12 +1024,13 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // The session's snapshot index goes with it; checkpoints are commits and stay. A /clear goes
+  // The session's snapshot indexes go with it; checkpoints are commits and stay. A /clear goes
   // on in this process under a new session id with no session.start: the new session is taken
   // up here, once the old one has ended.
   on('session.end', async ($, e, next) => {
-    if (snapshotIndex) {
-      await $.process.run(removeArgv([snapshotIndex], isWindows), { timeoutMs: 5000 }).catch((error: unknown) => debug($, error))
+    const indexes = [snapshotIndex, ...(await otherSnapshotIndexes($))].filter(path => path !== '')
+    if (indexes.length > 0) {
+      await $.process.run(removeArgv(indexes, isWindows), { timeoutMs: 5000 }).catch((error: unknown) => debug($, error))
     }
     const result = await next(e)
     if (e.reason === 'clear') {
@@ -1021,14 +1140,15 @@ export const register: Register = (on, options) => {
       // `toggle [tab]`: closes the pane when it is open, else opens it, on `tab` when one is named.
       if (first === 'toggle') {
         const named = rest[0] && (TABS as string[]).includes(rest[0]) ? (rest[0] as Tab) : undefined
+        const text = await togglePane($, named)
 
-        return { text: await togglePane($, named) }
+        return { text: text === m.paneClosed ? text : opened(text + hint) }
       }
       if (first === 'notes' && rest.length > 0) {
         const added = await addNote($, rest.join(' '))
         await openPane($, 'notes')
 
-        return { text: added ?? m.paneOpened(tabLabel('notes')) }
+        return { text: opened((added ?? m.paneOpened(tabLabel('notes'))) + hint) }
       }
       // `name <text>`: names the newest checkpoint and pins it, where the surface has no field for the dialog.
       if (first === 'name' && rest.length > 0) {
@@ -1037,7 +1157,7 @@ export const register: Register = (on, options) => {
         const named = await nameCheckpoint($, newest.ref, rest.join(' '))
         await openPane($, 'checkpoints')
 
-        return { text: named ?? m.paneOpened(tabLabel('checkpoints')) }
+        return { text: opened((named ?? m.paneOpened(tabLabel('checkpoints'))) + hint) }
       }
       if ((TABS as string[]).includes(first)) {
         await openPane($, first as Tab)
@@ -1140,8 +1260,9 @@ export const register: Register = (on, options) => {
       const file = files[at]
       const selected = view?.selected?.path === asked.ref ? view.selected : undefined
       if (view && file && selected) {
-        const lines = selected.text === '' ? [] : selected.text.split('\n')
-        const count = Math.max(1, Math.ceil(lines.length / DIFF_PAGE_LINES))
+        // Whole hunks on every page, each under a header of its own, so every page draws as a diff.
+        const pages = diffPages(selected.text, DIFF_PAGE_LINES)
+        const count = pages.length
         const index = Math.min(Math.max(0, await read($, diffPage)), count - 1)
         const turn = (step: number) => () => {
           void update($, diffPage, () => index + step).catch((error: unknown) => debug($, error))
@@ -1158,7 +1279,7 @@ export const register: Register = (on, options) => {
           header,
           file.path,
           `${counts} · ${m.diffDialogSince(view.base.label)}${omitted}`,
-          { source: lines.slice(index * DIFF_PAGE_LINES, (index + 1) * DIFF_PAGE_LINES).join('\n'), format: 'diff', path: file.path, empty: m.binary },
+          { source: pages[index] ?? '', format: 'diff', path: file.path, empty: m.binary },
           { index, count, label: m.readerPage(index + 1, count) },
           {
             previous: { label: m.readerPrevious, onPress: turn(-1) },
@@ -1333,7 +1454,7 @@ export const register: Register = (on, options) => {
     if (active === 'checkpoints') {
       body = CheckpointsTab(
         ui,
-        { checkpoints: checkpointRows, repoError: error, now, locale, m, bodyColumns, limit: CHECKPOINTS_SHOWN },
+        { checkpoints: checkpointRows, repoError: error, now, locale, m, bodyColumns, limit: CHECKPOINTS_SHOWN, isEveryPrompt: isCheckpointEveryPrompt },
         {
           restore: row => ask('restore', row.ref),
           compare: row =>
@@ -1353,7 +1474,7 @@ export const register: Register = (on, options) => {
               )
             })(),
           name: row => ask('name', row.ref),
-          togglePin: row => act(() => togglePin($, row.ref))(),
+          togglePin: row => act(() => setPin($, row.ref, row.isPinned !== true))(),
         },
       )
       tiles = [
@@ -1375,13 +1496,9 @@ export const register: Register = (on, options) => {
         { notes: noteRows, project: projectName(), isSentWithPrompts: isNotesInContext, hasField: e.surface !== 'mobile', m },
         {
           add: text => act(() => addNote($, text))(),
-          toggle: note =>
-            act(() =>
-              saveNotes(
-                $,
-                noteRows.map(one => (one.id === note.id ? { ...one, isDone: !one.isDone, isSuggestedDone: false } : one)),
-              ),
-            )(),
+          // What the person saw, turned over, applied to the notes as they are now: a second press
+          // before the redraw, or a note another session added, is never written over.
+          toggle: note => act(() => setNoteDone($, note.id, !note.isDone).then(() => undefined))(),
           insert: note =>
             act(async () => {
               await $.prompt.fill({ text: note.text, mode: 'insert' })
@@ -1400,7 +1517,7 @@ export const register: Register = (on, options) => {
         {
           key: 'clear-done',
           label: m.clearDone,
-          onPress: act(() => saveNotes($, noteRows.filter(note => !note.isDone))),
+          onPress: act(() => changeNotes($, list => list.filter(note => !note.isDone)).then(() => undefined)),
         },
       ]
     } else if (active === 'memory') {
@@ -1473,7 +1590,8 @@ export const register: Register = (on, options) => {
         onPress: act(async () => {
           const view = await read($, diff)
           if (!view || view.files.length === 0) return m.diffEmpty
-          await $.prompt.fill({ text: commitPrompt(view, now, locale, m), mode: 'replace' })
+          // Put in at the cursor, so what the person was typing stays.
+          await $.prompt.fill({ text: commitPrompt(view, now, locale, m), mode: 'insert' })
 
           return m.draftCommitFilled
         }),

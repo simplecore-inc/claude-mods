@@ -3,6 +3,7 @@
  * outline, and every line a search finds, with where it is. Pure: the hooks
  * module finds and reads the files.
  */
+import { displayWidth } from './shared/layout'
 
 /**
  * The fence a line opens or closes, by CommonMark's rule: up to three spaces
@@ -41,6 +42,13 @@ export function frontmatterOf(text: string): MemoryFront {
   }
 
   return front
+}
+
+/** Whether a rule file loads only while Claude works on files it matches: its frontmatter, and only that, names `paths`. */
+export function isPathRule(text: string): boolean {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+
+  return front !== null && /^paths\s*:/m.test(front[1] ?? '')
 }
 
 /**
@@ -104,6 +112,14 @@ export function normalize(path: string): string {
   return `${path.startsWith('/') ? '/' : ''}${parts.join('/')}`
 }
 
+/**
+ * The CLAUDE.md and CLAUDE.local.md files `git ls-files -z` lists, from the
+ * repository's top: NUL-separated, so a name under a Korean folder is as it is.
+ */
+export function claudeFiles(listed: string): string[] {
+  return listed.split('\0').filter(path => /(^|\/)CLAUDE(\.local)?\.md$/.test(path))
+}
+
 /** Every line of `files` holding `query`, ignoring case, in file order; at most `limit`. */
 export function searchMemory(files: { path: string; text: string }[], query: string, limit = 50): MemoryHit[] {
   const needle = query.trim().toLowerCase()
@@ -123,7 +139,7 @@ export function searchMemory(files: { path: string; text: string }[], query: str
 /** One page of a file for the reader: its Markdown and the file's line it starts on. */
 export type MarkdownPage = { text: string; firstLine: number }
 
-/** The most characters the engine's Markdown element takes; a page keeps under it. */
+/** The most characters a reader page asked for more than `READER_PAGE_CHARS` may hold. */
 export const MARKDOWN_LIMIT = 10_000
 /** The characters a reader page holds: about what a pane shows without scrolling, so its tiles stay in view. */
 export const READER_PAGE_CHARS = 3_000
@@ -170,8 +186,9 @@ export function markdownPages(text: string, room: { chars?: number; rows?: numbe
   // A line wraps at the reader's width; the rows a page may take leave a margin for that guess.
   const columns = Math.max(20, room.columns ?? 80)
   const rowLimit = room.rows === undefined ? Number.POSITIVE_INFINITY : Math.max(6, Math.floor(room.rows * 0.85))
-  // Wrapped lines are drawn joined into paragraphs, so a line of text costs its share of rows, a blank line one.
-  const rowsOf = (line: string) => (line.trim() === '' ? 1 : line.length / columns)
+  // Wrapped lines are drawn joined into paragraphs, so a line of text costs its share of rows, a blank line one;
+  // a wide character takes two cells of a row.
+  const rowsOf = (line: string) => (line.trim() === '' ? 1 : displayWidth(line) / columns)
   let rows = 0
   const front = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text)
   const skipped = front ? front[0].split('\n').length - 1 : 0

@@ -23,7 +23,7 @@ One pane with a tab for each part of the session: its agents and the repository'
 
 ### Agents
 
-The session's subagents and teammates: a coloured mark for the status (running `●`, waiting `◐`, done `✔`, failed `✖`), the type, and how long ago it started. A running one can be stopped (`■`).
+The session's subagents and teammates: a coloured mark for the status (running `●`, waiting `◐`, done `✔`, failed `✖`), the type, and how long ago it started. A running one can be stopped (`■`); a stop that is refused or fails says why.
 
 Under each agent, a dim line says what it did last: the tool it called and what on (`↳ 2m ago · Bash: npm test`), or, once its turn has ended, the first line of its answer marked `✔`. The status is read again the moment a turn ends, so a row never shows `running` beside an answer.
 
@@ -71,12 +71,12 @@ Beside the base, `up to Working tree ▾` picks the other end: the working tree 
 
 ![The dialog that picks what the changes are compared with](images/workspace-base.svg)
 
-Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts, or `binary`; every row is one line. Pressing a file opens its diff in a dialog, 24 lines a page, however long the list: **Previous page** and **Next page** turn it, and **◂ Previous file** and **Next file ▸** move along the list without closing it. A line over 400 characters is cut with `…`, and a diff past 5,000 lines says how many were left out on its last page.
+Each file shows a status letter (A, M, D, R), its name with the folder dimmed beside it, a bar of lines added and removed, and the counts, or `binary`; every row is one line. A name with Korean letters, a quote or a space is shown, opened and restored as it is. Pressing a file opens its diff in a dialog, at most 24 lines a page, however long the list: every page is drawn as a diff, its added and removed lines coloured and its line numbers carried on from the page before. **Previous page** and **Next page** turn it, and **◂ Previous file** and **Next file ▸** move along the list without closing it. A line over 400 characters is cut with `…`, and a diff past 5,000 lines says how many were left out on its last page.
 
 ![A file's diff in its dialog](images/workspace-diff-file.svg)
 
 - **↺ Restore** in the dialog puts that file alone back as it was at the base, after a dialog that says what it undoes. A file made since is deleted, and a rename is undone. A "Before restore" checkpoint is taken first, so it can be undone. Comparing two checkpoints, or another worktree's changes, there is no **↺ Restore**: only this working tree is written back.
-- **Draft commit message** puts a request in the prompt naming the range and every changed file with its counts. Claude reads the diffs, follows the repository's commit conventions and shows a message without committing. Nothing is sent until you press Enter.
+- **Draft commit message** puts a request in the prompt, at the cursor beside what you were typing, naming the range and every changed file with its counts. Claude reads the diffs, follows the repository's commit conventions and shows a message without committing. Nothing is sent until you press Enter.
 
 ### Memory
 
@@ -90,6 +90,7 @@ The memory files Claude Code reads in this session, global and project apart, as
 
 Each row says what the file is to Claude Code and how many lines it has.
 
+- The tab reads the files when it opens and when **Refresh** is pressed.
 - Pressing a file's name opens it to read: its Markdown drawn as a reply is, a page at a time, with **Previous page** and **Next page**. A page ends at a heading or between paragraphs, and lines wrapped in the file are read as the paragraphs they are. An auto-memory file leads with its name and description.
   ![A memory file opened to read](images/workspace-reader.svg)
 
@@ -115,10 +116,11 @@ Every action that cannot be taken back (restoring a checkpoint, deleting a note,
 
 ## How it works
 
-- **Checkpoints are git objects.** A snapshot is built in an index of the session's own (`GIT_INDEX_FILE` set to `.git/sc-snapshot-<session>.index`), with tracked and untracked files and ignored ones left out, then kept as a commit under `refs/sc/checkpoints/<session>/<n>`. The index is kept between snapshots, so a snapshot rehashes only the files that changed, and it is deleted when the session ends. Two sessions in one repository never share an index lock. Your staging area, branches and stash are never touched. The newest 50 checkpoints per project are kept; older ones lose their refs.
+- **Checkpoints are git objects.** A snapshot is built in an index of the session's own (`GIT_INDEX_FILE` set to `.git/sc-snapshot-<session>.index`), with tracked and untracked files and ignored ones left out, then kept as a commit under `refs/sc/checkpoints/<session>/<n>`. The index is kept between snapshots, so a snapshot rehashes only the files that changed; it is deleted when the session ends, with the indexes made in other worktrees whose changes were shown. Two sessions in one repository never share an index lock. Your staging area, branches and stash are never touched. The newest 50 checkpoints per project are kept; older ones lose their refs.
+- **Notes and the checkpoint list are files in the repository.** They are kept in its git folder, `.git/sc-workspace/`, a pair of files per worktree, so they stay with the project and go with it. Every change (a note added or ticked, a checkpoint taken, pinned or named) is made to the file as it stands at that moment, so two sessions of one project, or two presses before the pane redraws, never write over each other.
 - **Restoring** writes back every file the checkpoint holds (`git restore --source`) and removes the files made since it. Ignored files are left alone.
-- **Live updates.** The Checkpoints, Diff and Notes tabs catch up 1.5 seconds after a file-changing tool call (Edit, Write, MultiEdit, NotebookEdit, Bash, a subagent's included) settles, and every five seconds while the pane is open, so edits made in an editor show too. Nothing is computed while the pane is closed, and nothing is redrawn when nothing changed. Notes are re-read from the store, so a note another session wrote shows here as well.
-- **Agents** come from Claude Code's own list of the session's agents, read every three seconds. Stopping one calls Claude Code's `TaskStop` tool, with its usual permission check.
+- **Live updates.** The Checkpoints, Diff and Notes tabs catch up 1.5 seconds after a file-changing tool call (Edit, Write, MultiEdit, NotebookEdit, Bash, a subagent's included) settles, and every five seconds while the pane is open, so edits made in an editor show too. Nothing is computed while the pane is closed, and nothing is redrawn when nothing changed; the changes since each checkpoint are counted again only when the working tree or the checkpoints changed. Notes are re-read from their file, so a note another session wrote shows here as well.
+- **Agents** come from Claude Code's own list of the session's agents, read every three seconds. Stopping one calls Claude Code's `TaskStop` tool, with its usual permission check, by the agent's id first and then by its name, which two agents may share.
 - **Worktrees** come from `git worktree list`. A worktree is removed with `git worktree remove` (never forced) and its branch with `git branch -d`, which refuses an unmerged branch.
 - Outside a git repository the Agents tab still lists agents; the other tabs say that they need a repository.
 

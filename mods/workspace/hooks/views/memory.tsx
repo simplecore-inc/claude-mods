@@ -3,7 +3,7 @@ import type { ElementTable } from 'claude-code'
 import type { MemoryFile, MemoryScope } from '../../types'
 import type { Messages } from '../i18n'
 import type { MemoryHit } from '../memory'
-import { displayWidth, truncate } from '../shared/layout'
+import { displayWidth, printable, truncate } from '../shared/layout'
 import { Card, CARD_CHROME, Empty, IconButton, InputFrame, LinkButton, OutlineList, RankList, Section, SelectField, SubLine, theme } from '../shared/kit'
 
 export type MemoryModel = {
@@ -44,7 +44,7 @@ export function MemoryTab(ui: ElementTable, model: MemoryModel, actions: MemoryA
     const isOpen = model.open === file.path
     const facts = `${m.memoryKind[file.kind]} · ${m.memoryLines(file.lines)}`
     // The path is cut to what the facts and the insert button leave, so the row stays one line.
-    const label = truncate(file.display, Math.max(12, inner - displayWidth(facts) - 8))
+    const label = truncate(printable(file.display), Math.max(12, inner - displayWidth(facts) - 8))
 
     return (
       <Box key={`memory-${file.path}`} flexDirection="column">

@@ -69,13 +69,41 @@ export function valuesProblem(tool: Pick<Tool, 'run' | 'params'>, values: Record
   return null
 }
 
-/** A short id for a new tool: its name in lowercase words, made unique among `taken`. */
-export function toolId(name: string, taken: readonly string[]): string {
-  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tool'
+/** `base`, or with `-2`, `-3` and on after it, whichever no tool in `taken` holds yet. */
+function freeId(base: string, taken: readonly string[]): string {
   let id = base
   for (let n = 2; taken.includes(id); n += 1) id = `${base}-${n}`
 
   return id
+}
+
+/** A short id for a new tool: its name in lowercase words, made unique among `taken`. */
+export function toolId(name: string, taken: readonly string[]): string {
+  return freeId(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tool', taken)
+}
+
+/** Whether an entry of the file is a tool the pane can use: a name, a known kind and a command. */
+function isWhole(raw: Partial<Tool> | null): raw is Partial<Tool> & Pick<Tool, 'name' | 'run' | 'kind'> {
+  return raw !== null && typeof raw === 'object' && typeof raw.name === 'string' && typeof raw.run === 'string' && KINDS.includes(raw.kind as ToolKind)
+}
+
+/**
+ * The id each entry of the file's list goes by, in order: its own when given,
+ * else one made from its name, and either made unique, so two entries given
+ * one id are still two tools to run, stop and log apart; null for an entry
+ * left out.
+ */
+export function toolIds(list: readonly unknown[]): (string | null)[] {
+  const taken: string[] = []
+
+  return list.map(item => {
+    const raw = item as Partial<Tool> | null
+    if (!isWhole(raw)) return null
+    const id = typeof raw.id === 'string' && raw.id !== '' ? freeId(raw.id, taken) : toolId(raw.name, taken)
+    taken.push(id)
+
+    return id
+  })
 }
 
 function asParam(value: unknown): ToolParam | null {
@@ -101,11 +129,13 @@ function asParam(value: unknown): ToolParam | null {
 export function parseTools(text: string): { tools: Tool[]; problems: string[] } {
   const data = JSON.parse(text) as { tools?: unknown }
   const list = Array.isArray(data.tools) ? data.tools : []
+  const ids = toolIds(list)
   const tools: Tool[] = []
   const problems: string[] = []
   list.forEach((item, index) => {
     const raw = item as Partial<Tool> | null
-    if (!raw || typeof raw.name !== 'string' || typeof raw.run !== 'string' || !KINDS.includes(raw.kind as ToolKind)) {
+    const id = ids[index]
+    if (!isWhole(raw) || !id) {
       problems.push(`tools[${index}]`)
 
       return
@@ -116,7 +146,7 @@ export function parseTools(text: string): { tools: Tool[]; problems: string[] } 
         .filter((entry): entry is readonly [string, ToolParam] => entry[1] !== null),
     )
     tools.push({
-      id: typeof raw.id === 'string' && raw.id !== '' ? raw.id : toolId(raw.name, tools.map(tool => tool.id)),
+      id,
       name: raw.name,
       kind: raw.kind as ToolKind,
       run: raw.run,
@@ -131,9 +161,38 @@ export function parseTools(text: string): { tools: Tool[]; problems: string[] } 
   return { tools, problems }
 }
 
-/** The tools as `toolbox.json` text, two-space indented, for a person to read and edit too. */
-export function toolsText(tools: Tool[]): string {
-  return `${JSON.stringify({ version: 1, tools }, null, 2)}\n`
+/** The fields of a tool the pane writes; any other field of an entry is the person's and stays. */
+const TOOL_FIELDS: readonly string[] = ['id', 'name', 'kind', 'run', 'cwd', 'params', 'submit', 'confirm', 'group']
+
+/** A change the pane saves: a tool put in place of the one with its id, a new tool, or one removed by id. */
+export type ToolChange = { put: Tool } | { add: Omit<Tool, 'id'> } | { remove: string }
+
+/**
+ * `toolbox.json` with one change made to it as it stands now (`text`, or no
+ * file yet), two-space indented for a person to read and edit too. Only that tool's entry changes: tools added
+ * since the pane read the file, entries it cannot read, fields it does not
+ * know and the file's other keys stay as they are. A new tool goes last under
+ * an id no entry holds. Throws when the text is no JSON object, which is then
+ * left for the person to mend rather than written over.
+ */
+export function applyToolChange(text: string | undefined, change: ToolChange): string {
+  const data: unknown = text === undefined || text.trim() === '' ? {} : JSON.parse(text)
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${TOOLS_FILE} holds no object`)
+  const file = data as Record<string, unknown>
+  const list: unknown[] = Array.isArray(file.tools) ? [...file.tools] : []
+  const ids = toolIds(list)
+  if ('remove' in change) {
+    const at = ids.indexOf(change.remove)
+    if (at !== -1) list.splice(at, 1)
+  } else if ('add' in change) {
+    list.push({ id: toolId(change.add.name, ids.filter((id): id is string => id !== null)), ...change.add })
+  } else {
+    const at = ids.indexOf(change.put.id)
+    if (at === -1) list.push(change.put)
+    else list[at] = { ...change.put, ...Object.fromEntries(Object.entries(list[at] as object).filter(([key]) => !TOOL_FIELDS.includes(key))) }
+  }
+
+  return `${JSON.stringify({ version: 1, ...file, tools: list }, null, 2)}\n`
 }
 
 /**

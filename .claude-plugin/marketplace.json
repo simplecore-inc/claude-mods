@@ -4,7 +4,7 @@
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"
   },
-  "description": "SimpleCORE Claude Mods: Claude Code plugins for switching between Claude accounts, watching usage limits in a status band, and a workspace pane for agents, worktrees, checkpoints and diffs",
+  "description": "SimpleCORE Claude Mods: Claude Code plugins for switching between Claude accounts, watching usage limits in a status band, a workspace pane for agents, worktrees, checkpoints, notes, diffs and memory files, and a toolbox that runs the project's tasks",
   "plugins": [
     {
       "name": "sc",
@@ -18,7 +18,8 @@
         "statusline",
         "workspace",
         "git-worktree",
-        "checkpoints"
+        "checkpoints",
+        "toolbox"
       ]
     },
     {
@@ -37,7 +38,7 @@
     {
       "name": "sc-workspace",
       "source": "./mods/workspace",
-      "description": "A workspace pane: agents and worktrees, checkpoints, notes and changes in one tabbed pane",
+      "description": "A workspace pane: agents and worktrees, checkpoints, notes, changes and memory files in one tabbed pane",
       "category": "development",
       "tags": [
         "workspace",

@@ -1,6 +1,7 @@
 import type { ElementTable } from 'claude-code'
 
 import type { AgentActivity, AgentRow, FinishedAgent, WorktreeRow } from '../../types'
+import { printable } from '../shared/layout'
 import { formatDuration } from '../shared/time'
 import { isRemovable, shortPath } from '../git'
 import type { Messages } from '../i18n'
@@ -92,8 +93,8 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
             <Box justifyContent="space-between">
               <Text wrap="truncate-end">
                 {Toned(ui, `agent-mark-${agent.id}`, `${style.mark} `, style.tone, { isDim: style.isDim === true })}
-                <Text bold={agent.status === 'running'}>{agent.label}</Text>
-                <Text dimColor>{`  ${agent.type} · ${m.agentStatus[agent.status]} · ${elapsed(agent.firstSeen, model.now)}`}</Text>
+                <Text bold={agent.status === 'running'}>{printable(agent.label)}</Text>
+                <Text dimColor>{`  ${printable(agent.type)} · ${m.agentStatus[agent.status]} · ${elapsed(agent.firstSeen, model.now)}`}</Text>
               </Text>
               {isStoppable(agent) && (
                 <Box flexShrink={0} marginLeft={1}>
@@ -125,8 +126,8 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
                     <Box justifyContent="space-between">
                       <Text wrap="truncate-end">
                         {Toned(ui, `finished-mark-${agent.id}`, `${style.mark} `, style.tone, { isDim: style.isDim === true })}
-                        <Text>{agent.label}</Text>
-                        <Text dimColor>{`  ${agent.type} · ${m.activityAgo(elapsed(agent.endedAt, model.now))}`}</Text>
+                        <Text>{printable(agent.label)}</Text>
+                        <Text dimColor>{`  ${printable(agent.type)} · ${m.activityAgo(elapsed(agent.endedAt, model.now))}`}</Text>
                       </Text>
                       <Box flexShrink={0} marginLeft={1}>
                         {IconButton(ui, `answer-${agent.id}`, isOpen ? '▾' : '▸', theme.accent, () => actions.toggleAnswer(agent))}
@@ -166,9 +167,9 @@ export function AgentsTab(ui: ElementTable, model: AgentsModel, actions: AgentsA
                 {/* Another worktree's name opens its changes; this one's are the Diff tab's own. */}
                 {!row.isMain && row.branch
                   ? LinkButton(ui, `worktree-open-${row.path}`, row.branch, () => actions.openWorktree(row))
-                  : <Text bold>{row.branch ?? m.detached}</Text>}
+                  : <Text bold>{printable(row.branch ?? m.detached)}</Text>}
               <Text wrap="truncate-end">
-                <Text dimColor>{`  ${shortPath(row.path, model.root, model.home)}`}</Text>
+                <Text dimColor>{`  ${printable(shortPath(row.path, model.root, model.home))}`}</Text>
                 {facts.length > 0 && <Text dimColor>{`  ${facts.join(' · ')}`}</Text>}
                 {row.isMain && <Text> </Text>}
                 {row.isMain && Badge(ui, 'worktree-main', m.mainWorktree, 'gray')}

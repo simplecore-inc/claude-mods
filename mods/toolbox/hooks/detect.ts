@@ -27,6 +27,7 @@ export const BUILD_FILES = [
   'compose.yaml',
   'go.mod',
   'pyproject.toml',
+  'pnpm-workspace.yaml',
 ]
 
 /** Files whose presence alone says something: a lockfile's runner, a wrapper script, a Vite config. */
@@ -55,12 +56,44 @@ export function packageRunner(exists: ReadonlySet<string>): 'pnpm' | 'yarn' | 'b
   return 'npm'
 }
 
+/** A JSON file's data, or undefined when its text is no JSON: one broken file leaves out its own tasks alone. */
+function parsed(text: string | undefined): unknown {
+  if (text === undefined) return undefined
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined
+    throw error
+  }
+}
+
+/** The `package.json` files read here whose text is no JSON, so their scripts are left out: the Add tab names them. */
+export function unreadableFiles(files: Record<string, string>): string[] {
+  return Object.keys(files).filter(path => path.endsWith('package.json') && parsed(files[path]) === undefined)
+}
+
 /** The folder globs a root `package.json` names as workspaces (`packages/*`), from either form it takes. */
 export function workspaceGlobs(packageJson: string): string[] {
-  const data = JSON.parse(packageJson) as { workspaces?: unknown }
-  const raw = Array.isArray(data.workspaces) ? data.workspaces : (data.workspaces as { packages?: unknown } | undefined)?.packages
+  const data = parsed(packageJson) as { workspaces?: unknown } | undefined
+  const raw = Array.isArray(data?.workspaces) ? data.workspaces : (data?.workspaces as { packages?: unknown } | undefined)?.packages
 
   return Array.isArray(raw) ? raw.filter((one): one is string => typeof one === 'string') : []
+}
+
+/** The folder globs `pnpm-workspace.yaml` lists under `packages:`, an excluded one (`!...`) left out. */
+export function pnpmWorkspaceGlobs(yaml: string): string[] {
+  const globs: string[] = []
+  let isInside = false
+  for (const line of yaml.split('\n')) {
+    if (/^\S/.test(line)) {
+      isInside = /^packages\s*:/.test(line)
+      continue
+    }
+    const item = isInside ? /^\s*-\s*(['"]?)([^'"#]+?)\1\s*(?:#.*)?$/.exec(line) : null
+    if (item?.[2] && !item[2].startsWith('!')) globs.push(item[2].trim())
+  }
+
+  return globs
 }
 
 function npmTasks(files: Record<string, string>, exists: ReadonlySet<string>): DetectedTask[] {
@@ -68,12 +101,8 @@ function npmTasks(files: Record<string, string>, exists: ReadonlySet<string>): D
   const tasks: DetectedTask[] = []
   for (const [path, text] of Object.entries(files)) {
     if (!path.endsWith('package.json')) continue
-    let data: { name?: unknown; scripts?: Record<string, unknown> }
-    try {
-      data = JSON.parse(text) as typeof data
-    } catch {
-      continue
-    }
+    const data = parsed(text) as { name?: unknown; scripts?: Record<string, unknown> } | undefined
+    if (!data || typeof data !== 'object') continue
     const folder = path.slice(0, -'package.json'.length).replace(/\/$/, '')
     for (const [script, command] of Object.entries(data.scripts ?? {})) {
       if (typeof command !== 'string') continue
@@ -94,7 +123,7 @@ function npmTasks(files: Record<string, string>, exists: ReadonlySet<string>): D
 function viteTasks(files: Record<string, string>, exists: ReadonlySet<string>): DetectedTask[] {
   if (![...exists].some(name => /^vite\.config\.[mc]?[jt]s$/.test(name))) return []
   // A script that already runs Vite is the way the project means it run: those come from npm.
-  const scripts = files['package.json'] ? Object.values((JSON.parse(files['package.json']) as { scripts?: Record<string, unknown> }).scripts ?? {}) : []
+  const scripts = Object.values((parsed(files['package.json']) as { scripts?: Record<string, unknown> } | undefined)?.scripts ?? {})
   // Whether a script runs Vite this way: the dev server as `vite`, `vite dev` or `vite serve`.
   const runsVite = (pattern: RegExp) => scripts.some(command => typeof command === 'string' && pattern.test(command))
   const runner = packageRunner(exists)
@@ -237,14 +266,24 @@ function justTasks(files: Record<string, string>): DetectedTask[] {
   if (!name) return []
   const recipes: DetectedTask[] = []
   for (const line of (files[name] ?? '').split('\n')) {
-    const match = /^@?([A-Za-z_][\w-]*)((?:\s+[^:=]+)?)\s*:(?!=)/.exec(line)
+    // A recipe at the line's start, its parameters, then a colon that is no `:=` (a variable, a setting, an alias).
+    const match = /^@?([A-Za-z_][\w-]*)((?:\s+[^:]+?)?)\s*:(?!=)/.exec(line)
     if (!match?.[1]) continue
-    const args = (match[2] ?? '').trim().split(/\s+/).filter(Boolean).map(arg => arg.replace(/[=+*].*$/, ''))
+    // `+args` and `*args` take several words, kept as typed; `$name` is exported; `name='x'` offers x first.
+    const args = (match[2] ?? '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(token => /^([+*]?)\$?([A-Za-z_][\w-]*)(?:=(.*))?$/.exec(token))
+      .filter((arg): arg is RegExpExecArray => arg !== null)
+      .map(arg => ({ name: arg[2] ?? '', isVariadic: arg[1] !== '', value: (arg[3] ?? '').replace(/^(['"])(.*)\1$/, '$2') }))
     recipes.push({
       source: 'just',
       name: match[1],
-      run: `just ${match[1]}${args.map(arg => ` {{${arg}}}`).join('')}`,
-      ...(args.length > 0 ? { params: Object.fromEntries(args.map(arg => [arg, { type: 'text' as const, mode: 'ask' as const }])) } : {}),
+      run: `just ${match[1]}${args.map(arg => ` {{${arg.name}${arg.isVariadic ? '|raw' : ''}}}`).join('')}`,
+      ...(args.length > 0
+        ? { params: Object.fromEntries(args.map(arg => [arg.name, { type: 'text' as const, mode: 'ask' as const, ...(arg.value !== '' ? { value: arg.value } : {}) }])) }
+        : {}),
     })
   }
 

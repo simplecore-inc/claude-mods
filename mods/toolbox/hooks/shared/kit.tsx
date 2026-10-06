@@ -1,12 +1,14 @@
 // Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
 import type { ElementTable } from 'claude-code'
 
-import { barParts, displayWidth, padCells, severityColor, truncate } from './layout'
+import { barParts, displayWidth, padCells, printable, severityColor, truncate } from './layout'
 
 /**
  * The pieces every tab of the pane is built from, so the tabs look like one
  * screen: one header, one tab bar, one card, one gauge, one button language.
- * Each takes the surface's element table (`$.ui.resolve(e)`), never `$`.
+ * Each takes the surface's element table (`$.ui.resolve(e)`), never `$`, and
+ * draws every string it is given through `printable`, so text from outside
+ * holding a control character never refuses the pane.
  */
 
 export const theme = {
@@ -82,7 +84,9 @@ export type HeaderInfo = {
  */
 export function Header(ui: ElementTable, header: HeaderInfo) {
   const { Box, Button, Text } = ui
-  const { brand, release, exit } = header
+  const brand = printable(header.brand)
+  const release = header.release === undefined ? undefined : printable(header.release)
+  const exit = header.exit ? { ...header.exit, label: printable(header.exit.label) } : undefined
   const exitWidth = exit ? displayWidth(exit.label) + 2 : 0
   const room = (header.columns ?? 80) - displayWidth(brand) - exitWidth - 2
   const isReleaseShown = release !== undefined && displayWidth(release) <= room
@@ -130,13 +134,13 @@ export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSele
           >
             <Button
               key={`tab-button-${tab.key}`}
-              label={tab.label}
+              label={printable(tab.label)}
               hotkey={tab.hotkey}
               plain
               {...(isActive ? {} : { dimColor: true })}
               onPress={() => onSelect(tab.key)}
             />
-            {tab.badge && <Text color={isActive ? theme.accent : undefined} dimColor={!isActive}>{` ${tab.badge}`}</Text>}
+            {tab.badge && <Text color={isActive ? theme.accent : undefined} dimColor={!isActive}>{` ${printable(tab.badge)}`}</Text>}
           </Box>
         )
       })}
@@ -192,7 +196,7 @@ export function Toned(
 
   return (
     <Text key={key} color={tone ? theme[tone] : undefined} dimColor={style.isDim === true} bold={style.isBold === true} {...(style.wrap ? { wrap: style.wrap } : {})}>
-      {text}
+      {printable(text)}
     </Text>
   )
 }
@@ -244,7 +248,7 @@ export function InputFrame(ui: ElementTable, key: string, isAccent: boolean, inp
       gap={1}
       flexGrow={1}
     >
-      {glyph && <Text color={isAccent ? theme.accent : undefined}>{glyph}</Text>}
+      {glyph && <Text color={isAccent ? theme.accent : undefined}>{printable(glyph)}</Text>}
       {input as never}
     </Box>
   )
@@ -254,7 +258,7 @@ export function InputFrame(ui: ElementTable, key: string, isAccent: boolean, inp
 export function LinkButton(ui: ElementTable, key: string, label: string, onPress: () => void, extra: { autoFocus?: boolean } = {}) {
   const { Button } = ui
 
-  return <Button key={key} label={label} plain hover={{ color: theme.accent, bold: true }} {...(extra.autoFocus ? { autoFocus: true as const } : {})} onPress={onPress} />
+  return <Button key={key} label={printable(label)} plain hover={{ color: theme.accent, bold: true }} {...(extra.autoFocus ? { autoFocus: true as const } : {})} onPress={onPress} />
 }
 
 /** A section heading: a title, and a dim detail after it. */
@@ -263,8 +267,8 @@ export function Section(ui: ElementTable, key: string, title: string, detail?: s
 
   return (
     <Text key={key}>
-      <Text bold>{title}</Text>
-      {detail && <Text dimColor>{`  ${detail}`}</Text>}
+      <Text bold>{printable(title)}</Text>
+      {detail && <Text dimColor>{`  ${printable(detail)}`}</Text>}
     </Text>
   )
 }
@@ -281,7 +285,7 @@ export function Gauge(ui: ElementTable, key: string, label: string, percent: num
 
   return (
     <Text key={key}>
-      {labelTone ? <Text color={theme[labelTone]} bold>{`${label} `}</Text> : <Text dimColor>{`${label} `}</Text>}
+      {labelTone ? <Text color={theme[labelTone]} bold>{`${printable(label)} `}</Text> : <Text dimColor>{`${printable(label)} `}</Text>}
       <Text color={color}>{filled}</Text>
       <Text color={theme.track} dimColor>
         {rest}
@@ -304,7 +308,7 @@ export function IconButton(ui: ElementTable, key: string, glyph: string, tone: s
 
   return (
     <Box key={`${key}-ground`} flexShrink={0} backgroundColor={ground} hover={{ backgroundColor: theme.tileHover }}>
-      <Button key={key} label={glyph} plain hover={{ color: tone, bold: true }} onPress={onPress} />
+      <Button key={key} label={printable(glyph)} plain hover={{ color: tone, bold: true }} onPress={onPress} />
     </Box>
   )
 }
@@ -318,7 +322,7 @@ export function TileButton(ui: ElementTable, key: string, label: string, onPress
 
   return (
     <Box key={`${key}-tile`} paddingX={1} backgroundColor={theme.tileMain} hover={{ backgroundColor: theme.tileHover }}>
-      <Button key={key} label={label} plain onPress={onPress} />
+      <Button key={key} label={printable(label)} plain onPress={onPress} />
     </Box>
   )
 }
@@ -348,7 +352,7 @@ export function SubLine(ui: ElementTable, key: string, text: string) {
   return (
     <Box key={key} paddingLeft={2}>
       <Text dimColor wrap="truncate-end">
-        {`↳ ${text.replace(/\s+/g, ' ').trim()}`}
+        {`↳ ${printable(text).replace(/\s+/g, ' ').trim()}`}
       </Text>
     </Box>
   )
@@ -365,8 +369,8 @@ export function StatRow(ui: ElementTable, key: string, items: { label: string; v
     <Box key={key} columnGap={3} flexWrap="wrap">
       {items.map(item => (
         <Text key={`${key}-${item.label}`}>
-          <Text bold>{item.value}</Text>
-          <Text dimColor>{` ${item.label}`}</Text>
+          <Text bold>{printable(item.value)}</Text>
+          <Text dimColor>{` ${printable(item.label)}`}</Text>
         </Text>
       ))}
     </Box>
@@ -393,7 +397,7 @@ export function BarChart(ui: ElementTable, key: string, bars: { label: string; v
 
   return (
     <Box key={key} flexDirection="column">
-      <Text dimColor>{largestText}</Text>
+      <Text dimColor>{printable(largestText)}</Text>
       {rows.map(row => (
         <Text key={`${key}-row-${row}`} color={theme.accent}>
           {eighths.map(filled => cell(filled, row).repeat(barWidth)).join(' ')}
@@ -401,9 +405,9 @@ export function BarChart(ui: ElementTable, key: string, bars: { label: string; v
       ))}
       <Text key={`${key}-labels`} dimColor>
         {barWidth === 2
-          ? bars.map(bar => bar.label.slice(-2).padStart(2)).join(' ')
+          ? bars.map(bar => printable(bar.label).slice(-2).padStart(2)).join(' ')
           : // One-cell bars sit two cells apart: a two-character label fits under every fifth.
-            bars.reduce((line, bar, index) => (index % 5 === 0 ? padCells(line, index * 2) + bar.label.slice(-2) : line), '')}
+            bars.reduce((line, bar, index) => (index % 5 === 0 ? padCells(line, index * 2) + printable(bar.label).slice(-2) : line), '')}
       </Text>
     </Box>
   )
@@ -416,11 +420,12 @@ export function BarChart(ui: ElementTable, key: string, bars: { label: string; v
  */
 export function RankList(ui: ElementTable, key: string, rows: { name: string; detail: string; value: string; onPress?: () => void }[], width: number) {
   const { Box, Text } = ui
-  const valueWidth = Math.max(0, ...rows.map(row => displayWidth(row.value)))
+  const cleaned = rows.map(row => ({ ...row, name: printable(row.name), detail: printable(row.detail), value: printable(row.value) }))
+  const valueWidth = Math.max(0, ...cleaned.map(row => displayWidth(row.value)))
 
   return (
     <Box key={key} flexDirection="column">
-      {rows.map((row, index) => {
+      {cleaned.map((row, index) => {
         const free = Math.max(12, width - valueWidth - 4)
         const room = Math.min(displayWidth(row.name), Math.max(Math.floor(free / 2), free - displayWidth(row.detail)))
         const detail = truncate(row.detail, Math.max(0, free - room))
@@ -468,7 +473,7 @@ export function OutlineList(ui: ElementTable, key: string, entries: { line: numb
         return (
           <Text key={`${key}-${entry.line}`} wrap="truncate-end">
             <Text dimColor>{`${String(entry.line).padStart(numberWidth)}  `}</Text>
-            <Text>{truncate(`${indent}${entry.text}`, Math.max(6, width - numberWidth - 4))}</Text>
+            <Text>{truncate(`${indent}${printable(entry.text)}`, Math.max(6, width - numberWidth - 4))}</Text>
           </Text>
         )
       })}
@@ -482,7 +487,7 @@ export function Badge(ui: ElementTable, key: string, text: string, background = 
 
   return (
     <Text key={key} color="black" backgroundColor={background}>
-      {` ${text} `}
+      {` ${printable(text)} `}
     </Text>
   )
 }
@@ -495,7 +500,7 @@ export function Empty(ui: ElementTable, key: string, lines: string[]) {
     <Box key={key} flexDirection="column" paddingX={2} paddingY={1}>
       {lines.map((line, index) => (
         <Text key={`${key}-${index}`} dimColor={index > 0}>
-          {line}
+          {printable(line)}
         </Text>
       ))}
     </Box>
@@ -510,9 +515,10 @@ const TILE_PADDING = 2
  * centred on one line. Tiles that would squeeze a label onto two lines move
  * to a further row instead. The main action's tile carries the accent's tint.
  */
-export function Tiles(ui: ElementTable, bodyColumns: number, tiles: Tile[], outline?: { focused: string | null }) {
+export function Tiles(ui: ElementTable, bodyColumns: number, given: Tile[], outline?: { focused: string | null }) {
   const { Box, Button } = ui
-  if (tiles.length === 0) return null
+  if (given.length === 0) return null
+  const tiles = given.map(tile => ({ ...tile, label: printable(tile.label) }))
   const needed = Math.max(...tiles.map(tile => displayWidth(tile.label))) + TILE_PADDING * 2
   const perRow = Math.max(1, Math.min(tiles.length, Math.floor((bodyColumns + TILE_GAP) / (needed + TILE_GAP))))
   const width = Math.max(needed, Math.floor((bodyColumns - TILE_GAP * (perRow - 1)) / perRow))
@@ -604,7 +610,7 @@ export function StatusTiles(ui: ElementTable, bodyColumns: number, tiles: Status
             const buttons = tile.actions ?? []
             // The tile keeps a cell of padding each side; each glyph button is one cell with a cell before it.
             const text = Math.max(4, width - 2)
-            const title = Math.max(1, text - displayWidth(tile.icon) - 1 - buttons.length * 2)
+            const title = Math.max(1, text - displayWidth(printable(tile.icon)) - 1 - buttons.length * 2)
             const ground = tile.ground && tile.isLit !== false ? STATUS_GROUND[tile.ground] : theme.tile
 
             return (
@@ -612,7 +618,7 @@ export function StatusTiles(ui: ElementTable, bodyColumns: number, tiles: Status
                 <Box justifyContent="space-between">
                   <Box gap={1} flexShrink={1}>
                     {Toned(ui, `status-icon-${tile.key}`, tile.icon, tile.iconTone, { isBold: true })}
-                    <Button key={tile.key} label={padCells(truncate(tile.title.replace(/\s+/g, ' '), title), title)} plain onPress={tile.onPress} />
+                    <Button key={tile.key} label={padCells(truncate(printable(tile.title).replace(/\s+/g, ' '), title), title)} plain onPress={tile.onPress} />
                   </Box>
                   {buttons.length > 0 && (
                     <Box gap={1} flexShrink={0}>
@@ -620,7 +626,7 @@ export function StatusTiles(ui: ElementTable, bodyColumns: number, tiles: Status
                     </Box>
                   )}
                 </Box>
-                <Button key={`${tile.key}-status`} label={padCells(truncate(tile.status, text), text)} plain onPress={tile.onPress} />
+                <Button key={`${tile.key}-status`} label={padCells(truncate(printable(tile.status).replace(/\s+/g, ' '), text), text)} plain onPress={tile.onPress} />
               </Box>
             )
           })}
@@ -651,7 +657,7 @@ export function DialogFrame(
     <Box key="dialog-pane" flexDirection="column">
       {Header(ui, header)}
       <Box key="dialog" flexDirection="column" borderStyle="round" borderColor={borderColor} paddingX={1}>
-        <Text bold>{title}</Text>
+        <Text bold>{printable(title)}</Text>
         {body}
         {tiles}
       </Box>
@@ -692,7 +698,7 @@ export function Dialog(
     <Box key="dialog-lines" flexDirection="column" marginTop={1}>
       {lines.map((line, index) => (
         <Text key={`dialog-line-${index}`} color={color(line.tone)} dimColor={line.tone === 'muted'} wrap="wrap">
-          {line.text}
+          {printable(line.text)}
         </Text>
       ))}
     </Box>,
@@ -752,9 +758,9 @@ export function InputDialog(
               true,
               <Input
                 key={input.key}
-                placeholder={input.placeholder}
-                {...(input.value !== undefined ? { value: input.value } : {})}
-                submitLabel={input.submitLabel}
+                placeholder={printable(input.placeholder)}
+                {...(input.value !== undefined ? { value: printable(input.value) } : {})}
+                submitLabel={printable(input.submitLabel)}
                 autoFocus
                 onSubmit={input.onSubmit}
               />,
@@ -770,8 +776,8 @@ export function InputDialog(
 /**
  * A dialog that reads a document: its title and a dim line under it, one
  * page of its Markdown drawn as a reply is, and tiles to the previous and
- * next page, with the page's number, and Close. The engine's Markdown takes
- * at most 10,000 characters, so a longer document comes in pages.
+ * next page, with the page's number, and Close. A longer document comes in
+ * pages cut to a fixed row budget, so the tiles stay in view.
  */
 export function ReaderDialog(
   ui: ElementTable,
@@ -798,10 +804,10 @@ export function ReaderDialog(
     title,
     <Box key="reader-body" flexDirection="column">
       <Text dimColor wrap="truncate-end">
-        {page.count > 1 ? `${subtitle} · ${page.label}` : subtitle}
+        {printable(page.count > 1 ? `${subtitle} · ${page.label}` : subtitle)}
       </Text>
       <Box key="reader-page" flexDirection="column" marginTop={1}>
-        <Markdown key="reader-markdown" text={markdown} />
+        <Markdown key="reader-markdown" text={printable(markdown)} />
       </Box>
     </Box>,
     Tiles(ui, Math.max(20, bodyColumns - CARD_CHROME), tiles, { focused }),
@@ -818,14 +824,16 @@ export type FormField = {
   options?: { value: string; label: string }[]
   /** Values to pick under the field, such as paths matching what was typed. */
   suggestions?: string[]
-  onInput: (value: string) => void
-  onPick?: (value: string) => void
+  /** Takes the field's new value; the promise it may return settles once the value is kept. */
+  onInput: (value: string) => void | Promise<void>
+  onPick?: (value: string) => void | Promise<void>
 }
 
 /**
  * A dialog that asks for several values at once: each field its label dim,
  * then a bordered input or a select, and under a typed field the suggestions
- * to pick; the main tile submits, Cancel dismisses. Enter in any field submits.
+ * to pick; the main tile submits, Cancel dismisses. Enter in any field submits,
+ * after that field's value is kept.
  * Where the surface has no field, `noInput` says how else to give the values.
  */
 export function FormDialog(
@@ -854,14 +862,14 @@ export function FormDialog(
       {Input &&
         fields.map((field, index) => (
           <Box key={`form-field-${field.key}`} flexDirection="column">
-            <Text dimColor>{field.label}</Text>
+            <Text dimColor>{printable(field.label)}</Text>
             {field.options && Select ? (
               <Select
                 key={`field-${field.key}`}
-                options={field.options}
+                options={field.options.map(option => ({ ...option, label: printable(option.label) }))}
                 value={field.value}
                 {...(index === 0 ? { autoFocus: true as const } : {})}
-                onSelect={value => field.onInput(value)}
+                onSelect={value => void field.onInput(value)}
               />
             ) : (
               InputFrame(
@@ -870,21 +878,19 @@ export function FormDialog(
                 true,
                 <Input
                   key={`field-${field.key}`}
-                  value={field.value}
-                  {...(field.placeholder ? { placeholder: field.placeholder } : {})}
+                  value={printable(field.value)}
+                  {...(field.placeholder ? { placeholder: printable(field.placeholder) } : {})}
                   {...(index === 0 ? { autoFocus: true as const } : {})}
-                  onInput={value => field.onInput(value)}
-                  onSubmit={value => {
-                    field.onInput(value)
-                    actions.submit.onPress()
-                  }}
+                  onInput={value => void field.onInput(value)}
+                  // Enter submits once the field's value is kept, so the submit reads what was typed.
+                  onSubmit={value => void Promise.resolve(field.onInput(value)).then(actions.submit.onPress, actions.submit.onPress)}
                 />,
               )
             )}
             {(field.suggestions ?? []).length > 0 && (
               <Box key={`form-suggest-${field.key}`} flexDirection="column" paddingLeft={2}>
                 {(field.suggestions ?? []).map((suggestion, row) =>
-                  LinkButton(ui, `suggest-${field.key}-${row}`, suggestion, () => (field.onPick ?? field.onInput)(suggestion)),
+                  LinkButton(ui, `suggest-${field.key}-${row}`, suggestion, () => void (field.onPick ?? field.onInput)(suggestion)),
                 )}
               </Box>
             )}
@@ -929,7 +935,7 @@ export function LogDialog(
     <Box key="log-body" flexDirection="column" marginTop={1}>
       {Toned(ui, 'log-status', status.text, status.tone)}
       <Box key="log-lines" flexDirection="column" marginTop={1}>
-        {log.text === '' ? Toned(ui, 'log-empty', log.empty, undefined, { isDim: true }) : <Code key="log-code" source={log.text} startLine={log.firstLine} wrap="wrap" />}
+        {log.text === '' ? Toned(ui, 'log-empty', log.empty, undefined, { isDim: true }) : <Code key="log-code" source={printable(log.text)} startLine={log.firstLine} wrap="wrap" />}
       </Box>
     </Box>,
     Tiles(
@@ -974,13 +980,18 @@ export function CodeDialog(
     title,
     <Box key="code-body" flexDirection="column" marginTop={1}>
       <Text dimColor wrap="truncate-end">
-        {page.count > 1 ? `${subtitle} · ${page.label}` : subtitle}
+        {printable(page.count > 1 ? `${subtitle} · ${page.label}` : subtitle)}
       </Text>
       <Box key="code-lines" flexDirection="column" marginTop={1}>
-        {code.source.trim() === '' ? (
+        {printable(code.source).trim() === '' ? (
           Toned(ui, 'code-empty', code.empty, undefined, { isDim: true })
         ) : (
-          <Code key="code-source" source={code.source} {...(code.format ? { format: code.format } : {})} {...(code.path ? { path: code.path } : {})} />
+          <Code
+            key="code-source"
+            source={printable(code.source)}
+            {...(code.format ? { format: code.format } : {})}
+            {...(code.path ? { path: printable(code.path) } : {})}
+          />
         )}
       </Box>
     </Box>,
@@ -1012,9 +1023,10 @@ export function ChoiceDialog(
   const { Box, Text } = ui
   // Every row is one line: the details share one column at the right, and the labels
   // take what is left of the dialog's width and are cut to it, never wrapped.
-  const detailWidth = Math.max(0, ...choices.map(choice => displayWidth(choice.detail ?? '')))
+  const details = choices.map(choice => (choice.detail === undefined ? undefined : printable(choice.detail)))
+  const detailWidth = Math.max(0, ...details.map(detail => displayWidth(detail ?? '')))
   const labelRoom = Math.max(6, bodyColumns - CARD_CHROME - 2 - (detailWidth > 0 ? detailWidth + 1 : 0))
-  const labels = choices.map(choice => truncate(choice.label.replace(/\s+/g, ' ').trim(), labelRoom))
+  const labels = choices.map(choice => truncate(printable(choice.label).replace(/\s+/g, ' ').trim(), labelRoom))
   const labelWidth = Math.max(0, ...labels.map(displayWidth))
 
   return DialogFrame(
@@ -1029,10 +1041,10 @@ export function ChoiceDialog(
             {choice.isCurrent ? '●' : '○'}
           </Text>
           {LinkButton(ui, choice.key, padCells(labels[index] ?? '', labelWidth), choice.onPress, { autoFocus: choice.isCurrent === true })}
-          {choice.detail && (
+          {details[index] && (
             <Box flexShrink={0}>
               <Text dimColor wrap="truncate-end">
-                {choice.detail}
+                {details[index]}
               </Text>
             </Box>
           )}
@@ -1071,7 +1083,7 @@ export function Toggle(
       >
         <Button
           key={`${key}-${side}`}
-          label={states[side]}
+          label={printable(states[side])}
           plain
           {...(isCurrent ? {} : { dimColor: true })}
           // The current segment is already the state: pressing it changes nothing.
@@ -1089,7 +1101,7 @@ export function Toggle(
         {segment('on')}
         {segment('off')}
       </Box>
-      <Button key={`${key}-label`} label={label} plain hover={{ color: theme.accent, bold: true }} onPress={onToggle} />
+      <Button key={`${key}-label`} label={printable(label)} plain hover={{ color: theme.accent, bold: true }} onPress={onToggle} />
     </Box>
   )
 }

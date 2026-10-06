@@ -2,6 +2,30 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.6.1 (2026-10-06)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window. Workspace notes and checkpoint lists move from the plugin store into each repository's git folder, `.git/sc-workspace/`, the first time a session starts there.
+
+### Workspace (`sc-workspace`)
+
+- A file with Korean letters, a quote or a control character in its name is listed, opened and restored as it is; restoring a checkpoint removes such files made since it.
+- A diff longer than a page is drawn as a diff on every page, coloured, its line numbers carried on.
+- Text holding an escape sequence or a control character (a diff, an agent's answer, a prompt) no longer leaves the pane blank, and opening the pane drops a dialog such a draw left.
+- Notes and checkpoints are kept in the repository and every change is made to the file as it stands, so two presses before a redraw, or another session's note, are never written over.
+- Stopping an agent names it by its id first and says why a stop was refused or failed.
+- The Memory tab is read when it opens and on Refresh, not every five seconds; the Checkpoints tab counts again only when something changed.
+- Draft commit message puts its request at the cursor; replies of `notes`, `name` and `toggle` carry the click hint; snapshot indexes made in other worktrees are deleted with the session.
+
+### Toolbox (`sc-toolbox`)
+
+- A run's log keeps text alone: colours, cursor moves, bells and backspaces are left out, and a progress line rewritten in place shows as it now stands.
+- Saving or removing a tool changes that tool alone in `toolbox.json` as it stands; two tools given one id are told apart.
+- A run goes on through `/clear` and stays shown and stoppable.
+- The log file keeps its newest 3 MB in bytes, so Korean output never passes the write limit.
+- Enter in a value field runs with what was typed; a Claude command waiting is not queued twice; a prompt tool puts its text at the cursor.
+- pnpm workspaces are read, a broken `package.json` is named instead of failing every build file, and just recipes with default or variadic parameters are offered.
+
 ## 0.6.0 (2026-10-06)
 
 > [!IMPORTANT]

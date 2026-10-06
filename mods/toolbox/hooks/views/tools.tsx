@@ -4,7 +4,7 @@ import type { RunStatus, Tool, ToolKind } from '../../types'
 import type { Messages } from '../i18n'
 import type { StatusTile, TileAction, Tone } from '../shared/kit'
 import { Card, CARD_CHROME, Empty, IconButton, LinkButton, Section, StatusTiles, SubLine, theme, Tiles, Toned } from '../shared/kit'
-import { displayWidth, truncate } from '../shared/layout'
+import { displayWidth, printable, truncate } from '../shared/layout'
 import { askedParams } from '../tools'
 
 /** How far a shell run says it has got. */
@@ -70,7 +70,7 @@ export function ToolsTab(ui: ElementTable, model: ToolsModel, actions: ToolsActi
         <Box justifyContent="space-between">
           <Box gap={1} flexShrink={1}>
             {Toned(ui, `tool-mark-${tool.id}`, mark.mark, mark.tone)}
-            {LinkButton(ui, `tool-run-name-${tool.id}`, truncate(tool.name, room), () => actions.run(tool))}
+            {LinkButton(ui, `tool-run-name-${tool.id}`, truncate(printable(tool.name), room), () => actions.run(tool))}
             <Text dimColor wrap="truncate-end">
               {status}
             </Text>

@@ -2,10 +2,12 @@ import type { ElementTable } from 'claude-code'
 
 import type { DetectedTask } from '../../types'
 import type { Messages } from '../i18n'
-import { Card, CARD_CHROME, Empty, InputFrame, RankList, Section, TileButton } from '../shared/kit'
+import { Card, CARD_CHROME, Empty, InputFrame, RankList, Section, TileButton, Toned } from '../shared/kit'
 
 export type AddModel = {
   detected: DetectedTask[] | null
+  /** Build files that hold no JSON, their tasks left out. */
+  unreadable: string[]
   commands: { name: string; description: string; source: string }[] | null
   query: string
   /** Whether Gradle's whole task list can be loaded here. */
@@ -66,6 +68,7 @@ export function AddTab(ui: ElementTable, model: AddModel, actions: AddActions) {
           {Section(ui, 'add-detected-title', m.addDetected)}
           {model.hasGradle && TileButton(ui, 'add-gradle-all', m.addGradleAll, actions.loadGradle)}
         </Box>
+        {model.unreadable.length > 0 && Toned(ui, 'add-detected-unreadable', m.addUnreadable(model.unreadable.join(', ')), 'danger', { wrap: 'wrap' })}
         {model.detected === null && Empty(ui, 'add-detected-loading', [m.loading])}
         {model.detected !== null && model.detected.length === 0 && Empty(ui, 'add-detected-none', [m.addDetectedNone])}
         {sources.map(source =>

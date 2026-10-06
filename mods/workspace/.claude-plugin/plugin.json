@@ -1,9 +1,9 @@
 {
   "name": "sc-workspace",
   "displayName": "SimpleCORE Workspace",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
-  "description": "A workspace pane for Claude Code: agents and worktrees, checkpoints, notes and changes in one tabbed pane",
+  "description": "A workspace pane for Claude Code: agents and worktrees, checkpoints, notes, changes and memory files in one tabbed pane",
   "author": {
     "name": "SimpleCORE",
     "email": "dev@simplecore.kr"

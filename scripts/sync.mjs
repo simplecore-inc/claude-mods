@@ -9,7 +9,9 @@
 // --check also holds every view to the shared kit: a file under
 // mods/<mod>/hooks/views/ styles no element itself (colour, fill, border,
 // hover). A view that draws colours it is given, not the theme's, says so
-// with a `ui-check: raw-colours` comment and is passed over.
+// with a `ui-check: raw-colours` comment and is passed over. And every message
+// a mod's hooks/i18n.ts defines is read somewhere in its hooks: a string no
+// screen shows is a string nobody keeps translated.
 //
 // A plugin reads only files inside its own folder, so each source is copied
 // in. The copies are never edited by hand: edit the source, then run this.
@@ -130,6 +132,41 @@ for (const mod of isCheck ? mods : []) {
 }
 if (rawStyles > 0) {
   console.error(`${rawStyles} element(s) styled in a view; draw them with a component from shared/kit.tsx`)
+  process.exit(1)
+}
+
+/** Every file under `dir` whose name ends in .ts or .tsx, the shared copies left out. */
+function sourcesUnder(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) return entry.name === 'shared' ? [] : sourcesUnder(path)
+
+    return /\.tsx?$/.test(entry.name) ? [path] : []
+  })
+}
+
+// A message is read as `<anything>.<key>`: `m.key`, `ctx.messages().key`.
+let unusedMessages = 0
+for (const mod of isCheck ? mods : []) {
+  const hooks = join(root, 'mods', mod, 'hooks')
+  const i18n = join(hooks, 'i18n.ts')
+  if (!existsSync(i18n)) continue
+  const text = readFileSync(i18n, 'utf8')
+  const start = text.indexOf('const en = {')
+  if (start === -1) continue
+  const keys = [...text.slice(start, text.indexOf('\n}\n', start)).matchAll(/^ {2}(\w+):/gm)].map(match => match[1])
+  const code = sourcesUnder(hooks)
+    .filter(path => path !== i18n)
+    .map(path => readFileSync(path, 'utf8'))
+    .join('\n')
+  for (const key of keys) {
+    if (new RegExp(`\\.${key}\\b`).test(code)) continue
+    unusedMessages += 1
+    console.error(`message never shown: mods/${mod}/hooks/i18n.ts: ${key}`)
+  }
+}
+if (unusedMessages > 0) {
+  console.error(`${unusedMessages} message(s) no hook reads; show them where they belong or delete them in every language`)
   process.exit(1)
 }
 

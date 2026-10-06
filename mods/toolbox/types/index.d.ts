@@ -88,6 +88,8 @@ declare module 'claude-code' {
       logTick: number
       /** The tasks found in the project's build files, or null before they are read. */
       detected: DetectedTask[] | null
+      /** The build files read for them that hold no JSON, their tasks left out: the Add tab names them. */
+      unreadable: string[]
       /** Claude Code's slash commands, as the typeahead lists them; null before they are read. */
       commands: { name: string; description: string; source: string }[] | null
       /** What the Add tab filters by. */

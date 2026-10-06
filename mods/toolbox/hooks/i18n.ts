@@ -55,6 +55,7 @@ const en = {
   addDetected: 'From this project',
   addDetectedNone: 'No build file found here: package.json, pom.xml, build.gradle, Cargo.toml, Makefile, justfile, compose.yaml, go.mod or pyproject.toml.',
   addGradleAll: 'Load every Gradle task',
+  addUnreadable: (files: string) => `Could not read ${files}: its tasks are left out until it holds valid JSON.`,
   addClaude: 'Claude commands',
   addCustom: 'Your own',
   addShell: '+ Shell command',
@@ -99,6 +100,7 @@ const en = {
   started: (name: string) => `Started ${name}.`,
   stoppedToast: (name: string) => `Stopped ${name}.`,
   queuedToast: (name: string) => `${name} runs once Claude is idle.`,
+  alreadyQueued: (name: string) => `${name} is already waiting for Claude.`,
   filled: 'Put it in the prompt box.',
   sent: 'Sent.',
   logTitle: (name: string) => `Log: ${name}`,
@@ -109,7 +111,6 @@ const en = {
   logFollow: 'Follow',
   logFollowing: 'Following',
   stopButton: '■ Stop',
-  noShell: 'Stopping a whole run needs a POSIX shell; on Windows the command itself is stopped.',
 }
 
 export type Messages = typeof en
@@ -164,6 +165,7 @@ const ko: Messages = {
   addDetected: '이 프로젝트에서 찾은 작업',
   addDetectedNone: '빌드 파일이 없습니다: package.json, pom.xml, build.gradle, Cargo.toml, Makefile, justfile, compose.yaml, go.mod, pyproject.toml',
   addGradleAll: 'Gradle 작업 전부 불러오기',
+  addUnreadable: files => `${files} 파일을 읽지 못해 그 파일의 작업은 표시하지 않습니다. JSON 형식을 고치면 다시 표시합니다.`,
   addClaude: 'Claude 명령',
   addCustom: '직접 입력',
   addShell: '+ 셸 명령',
@@ -173,9 +175,9 @@ const ko: Messages = {
   newTitle: '새 도구',
   fieldName: '이름',
   fieldRun: {
-    shell: '명령. {{file}}처럼 {{ }}로 감싼 단어는 실행할 때마다 묻습니다',
-    claude: '슬래시 명령과 인수. {{ }}로 감싼 단어는 실행할 때마다 묻습니다',
-    prompt: '프롬프트. {{ }}로 감싼 단어는 실행할 때마다 묻습니다',
+    shell: '명령. {{file}}처럼 {{ }} 안에 쓴 단어는 실행할 때마다 묻습니다',
+    claude: '슬래시 명령과 인수. {{ }} 안에 쓴 단어는 실행할 때마다 묻습니다',
+    prompt: '프롬프트. {{ }} 안에 쓴 단어는 실행할 때마다 묻습니다',
   },
   fieldCwd: '실행할 폴더(프로젝트 기준)',
   fieldSubmit: '실행할 때',
@@ -196,7 +198,7 @@ const ko: Messages = {
   nameMissing: '도구에는 이름과 명령이 필요합니다.',
   askTitle: name => `${name} 실행`,
   runButton: '실행',
-  notChoice: name => `{{${name}}}는 선택지 중 하나여야 합니다.`,
+  notChoice: name => `{{${name}}} 값은 선택지 중 하나여야 합니다.`,
   noInput: '값을 묻는 도구는 입력란이 필요합니다. 터미널이나 데스크톱 앱에서 실행해 주세요.',
   removeTitle: name => `${name}을(를) 삭제할까요?`,
   removeHint: '.toolbox/toolbox.json에서 지웁니다. 로그는 남습니다.',
@@ -208,6 +210,7 @@ const ko: Messages = {
   started: name => `${name}을(를) 시작했습니다.`,
   stoppedToast: name => `${name}을(를) 중단했습니다.`,
   queuedToast: name => `${name}은(는) Claude가 응답을 마치면 실행됩니다.`,
+  alreadyQueued: name => `${name}은(는) 이미 실행 대기 중입니다. Claude가 응답을 마치면 실행됩니다.`,
   filled: '입력창에 채웠습니다.',
   sent: '보냈습니다.',
   logTitle: name => `로그: ${name}`,
@@ -218,7 +221,6 @@ const ko: Messages = {
   logFollow: '따라가기',
   logFollowing: '따라가는 중',
   stopButton: '■ 중단',
-  noShell: '실행 전체를 중단하려면 POSIX 셸이 필요합니다. Windows에서는 명령 자체만 중단합니다.',
 }
 
 export function messagesFor(locale: Locale): Messages {

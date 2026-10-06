@@ -48,20 +48,31 @@ export function snapshotIndexName(session: string): string {
   return `sc-snapshot-${session.replace(/[^A-Za-z0-9_-]/g, '_')}.index`
 }
 
+/** The snapshot running in each index, which the next one in it waits for. */
+const snapshots = new Map<string, Promise<unknown>>()
+
 /**
  * The working tree as a tree object: tracked and untracked files, ignored
  * ones left out. Built in an index of the session's own (`indexPath`), so the
- * user's staging area is never touched and two sessions never share a lock.
- * The index is kept between snapshots: `git add --all` then rehashes only the
- * files that changed, where a fresh index rehashes every file (2.2 s against
- * 0.06 s on a repository of 2,000 files). A missing index reads as empty, so
- * the first snapshot adds every file.
+ * user's staging area is never touched and two sessions never share a lock;
+ * snapshots in one index run one at a time, as git's lock on it needs. The
+ * index is kept between snapshots: `git add --all` then rehashes only the
+ * files that changed, where a fresh index rehashes every file. A missing
+ * index reads as empty, so the first snapshot adds every file.
  */
-export async function snapshotTree(run: Run, root: string, indexPath: string): Promise<string> {
-  const env = { GIT_INDEX_FILE: indexPath }
-  await git(run, root, ['add', '--all'], env)
+export function snapshotTree(run: Run, root: string, indexPath: string): Promise<string> {
+  const taking = (snapshots.get(indexPath) ?? Promise.resolve()).then(async () => {
+    const env = { GIT_INDEX_FILE: indexPath }
+    await git(run, root, ['add', '--all'], env)
 
-  return (await git(run, root, ['write-tree'], env)).trim()
+    return (await git(run, root, ['write-tree'], env)).trim()
+  })
+  snapshots.set(
+    indexPath,
+    taking.catch(() => undefined),
+  )
+
+  return taking
 }
 
 /** Takes a checkpoint: `tree`, a snapshot of the working tree, kept as a commit under `ref`. */
@@ -102,8 +113,8 @@ export async function diffSummary(run: Run, root: string, from: string, to: stri
 
 export async function diffFiles(run: Run, root: string, from: string, to: string): Promise<DiffFile[]> {
   const [nameStatus, numstat] = await Promise.all([
-    git(run, root, ['diff', '--name-status', '-M', from, to]),
-    git(run, root, ['diff', '--numstat', '-M', from, to]),
+    git(run, root, ['diff', '-z', '--name-status', '-M', from, to]),
+    git(run, root, ['diff', '-z', '--numstat', '-M', from, to]),
   ])
 
   return parseDiffFiles(nameStatus, numstat)
@@ -111,10 +122,11 @@ export async function diffFiles(run: Run, root: string, from: string, to: string
 
 /**
  * One file's diff. The path is taken literally: a name holding `*`, `[` or a
- * leading `:` is that file, never a pattern.
+ * leading `:` is that file, never a pattern. Its headers name the file as it
+ * is, a Korean name included, not as an octal-quoted string.
  */
 export async function fileDiff(run: Run, root: string, from: string, to: string, path: string): Promise<string> {
-  return git(run, root, ['--literal-pathspecs', 'diff', '-M', from, to, '--', path])
+  return git(run, root, ['-c', 'core.quotePath=false', '--literal-pathspecs', 'diff', '-M', from, to, '--', path])
 }
 
 /**
@@ -131,8 +143,9 @@ export async function restoreCheckpoint(
   isWindows = false,
 ): Promise<number> {
   await git(run, root, ['restore', `--source=${commit}`, '--worktree', '--', ':/'])
-  const made = (await git(run, root, ['diff', '--name-only', '--diff-filter=A', '--no-renames', tree, currentTree]))
-    .split('\n')
+  // NUL-separated, so a name git would quote (a Korean one) is the file's own name.
+  const made = (await git(run, root, ['diff', '-z', '--name-only', '--diff-filter=A', '--no-renames', tree, currentTree]))
+    .split('\0')
     .filter(Boolean)
   for (let start = 0; start < made.length; start += 100) {
     const { exitCode, stderr } = await run(removeArgv(made.slice(start, start + 100), isWindows), { cwd: root })

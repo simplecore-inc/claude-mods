@@ -1,45 +1,6 @@
-import { expect, mock, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import { expect, test } from 'claude-code/testing'
 
-const NOW = Date.parse('2026-10-05T05:00:00Z')
-const TOOLS = [
-  { id: 'dev', name: 'dev server', kind: 'shell', run: 'pnpm run dev' },
-  { id: 'test', name: 'test one', kind: 'shell', run: 'pnpm vitest {{file}}', params: { file: { type: 'path', mode: 'ask' } } },
-  { id: 'clear', name: '/clear', kind: 'claude', run: '/clear' },
-  { id: 'review', name: 'review', kind: 'prompt', run: 'Review {{file}}' },
-]
-
-function seedState(on: On, extra: Record<string, unknown>): void {
-  const values: Record<string, unknown> = {
-    tab: 'tools',
-    tools: TOOLS,
-    toolsError: null,
-    runs: { dev: { state: 'running', startedAt: NOW - 90_000, command: 'pnpm run dev' } },
-    logTick: 0,
-    detected: null,
-    commands: null,
-    addQuery: '',
-    dialog: null,
-    draft: {},
-    suggest: null,
-    follow: true,
-    focused: null,
-    ...extra,
-  }
-  on('state.get', ($, e) => ({ value: { value: values[e.key], version: 1 } as never }))
-  mock.clock(on, { now: NOW } as never)
-}
-
-function mountPane($: Engine, surface: 'terminal' | 'desktop' | 'mobile' = 'terminal', bodyColumns = 100) {
-  return $.ui.mount({
-    plugin: 'sc-toolbox',
-    surface,
-    component: 'Pane',
-    requestId: 'sc-toolbox',
-    props: { title: 'Toolbox', isFocused: true, bodyColumns, placement: 'dock' } as never,
-  })
-}
+import { mountPane, NOW, openQuick, seedState } from './paneHarness'
 
 test('the tools list groups shell commands, Claude commands and prompts; a running one offers stop and its log', async ($, on) => {
   seedState(on, {})
@@ -74,11 +35,6 @@ test('the Add tab lists the project build tasks by ecosystem and Claude commands
   await ui.unmount()
 })
 
-async function openQuick($: Engine, on: On) {
-  on('ui.open', () => ({ value: { isPlaced: true } as never }))
-  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
-  await $.command.run({ command: 'sc:toolbox', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as never)
-}
 
 test('the quick view boxes the tools two to a row, apart from Settings and Close; a running tool shows its state, stop and log', async ($, on) => {
   seedState(on, {})
@@ -124,4 +80,115 @@ test('off fullscreen the first command that opens the pane says clicks need full
   expect((await $.command.run(typed(true))).text).toBe('Opened the toolbox.')
   expect((await $.command.run(typed(false))).text).toMatch(/^Opened the toolbox\. Clicks reach the panes only in fullscreen mode/)
   expect((await $.command.run(typed(false))).text).toBe('Opened the toolbox.')
+})
+
+test('opening the toolbox from its command drops a dialog an earlier draw left, so the tools show', async ($, on) => {
+  seedState(on, { dialog: { kind: 'log', id: 'dev' } })
+  const writes: { key: string; value: unknown }[] = []
+  on('state.set', ($, e) => {
+    writes.push({ key: e.key, value: e.value })
+
+    return { value: { isSet: true, version: 2 } as never }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  await $.command.run({ command: 'sc:toolbox', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } } as never)
+  expect(writes).toContainEqual({ key: 'dialog', value: null })
+})
+
+test('Enter in a value field runs the tool with what was typed in it', async ($, on) => {
+  const { values } = seedState(on, { dialog: { kind: 'ask', id: 'test' }, draft: {} }, { isWritable: true })
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  on('ui.toast', () => ({ value: undefined as never }))
+  on('fs.exists', () => ({ value: false as never }))
+  on('fs.write', () => ({ value: undefined as never }))
+  const ui = await mountPane($)
+  await $.ui.input({ plugin: 'sc-toolbox', key: 'field-file', text: 'src/a.test.ts' })
+  await ui.unmount()
+  // The run as it started, its value filled in: what Enter submitted, not the field as it stood before.
+  expect((values.runs as Record<string, { command: string }>).test?.command).toBe('pnpm vitest src/a.test.ts')
+})
+
+test('a prompt tool puts its text at the cursor, so what the person was typing stays', async ($, on) => {
+  seedState(on, { tools: [{ id: 'note', name: 'note', kind: 'prompt', run: 'Check the retry policy' }], runs: {} })
+  const filled: string[] = []
+  on('prompt.fill', ($, e) => {
+    filled.push(e.mode)
+
+    return { isFilled: true } as never
+  })
+  on('ui.toast', () => ({ value: undefined as never }))
+  const ui = await mountPane($)
+  await ui.press({ key: 'tool-run-note' })
+  expect(filled).toEqual(['insert'])
+  await ui.unmount()
+})
+
+test('a Claude command pressed again while it waits is not queued a second time, and its end is on the session\'s clock', async ($, on) => {
+  const { values, clock } = seedState(on, { tools: [{ id: 'compact', name: '/compact', kind: 'claude', run: '/compact' }], runs: {} }, { isWritable: true })
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined as never }
+  })
+  let finish: () => void = () => undefined
+  const asked: string[] = []
+  on('command.run', ($, e) => {
+    asked.push(e.command)
+
+    return new Promise(resolve => {
+      finish = () => resolve({ text: '' } as never)
+    })
+  })
+  const ui = await mountPane($)
+  await ui.press({ key: 'tool-run-compact' })
+  await ui.press({ key: 'tool-run-compact' })
+  expect(asked).toEqual(['compact'])
+  expect(toasts.some(text => /already waiting/.test(text))).toBe(true)
+  finish()
+  await clock.settle()
+  expect((values.runs as Record<string, { state: string; endedAt?: number }>).compact).toMatchObject({ state: 'done', endedAt: NOW })
+  await ui.unmount()
+})
+
+test('removing a tool from the pane keeps a tool added to the file since the pane read it', async ($, on) => {
+  const dev = { id: 'dev', name: 'dev server', kind: 'shell', run: 'pnpm run dev' }
+  seedState(on, { tools: [dev], runs: {}, dialog: { kind: 'remove', id: 'dev' } }, { isWritable: true })
+  const files: Record<string, string> = {
+    '/.toolbox/toolbox.json': JSON.stringify({ version: 1, tools: [dev, { id: 'lint', name: 'lint', kind: 'shell', run: 'pnpm lint' }] }),
+  }
+  on('fs.exists', ($, e) => ({ value: (e.path in files) as never }))
+  on('fs.read', ($, e) => ({ value: (files[e.path] ?? '') as never }))
+  on('fs.write', ($, e) => {
+    files[e.path] = e.text
+
+    return { value: undefined as never }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  on('ui.toast', () => ({ value: undefined as never }))
+  const ui = await mountPane($)
+  await ui.press({ key: 'dialog-confirm' })
+  await ui.unmount()
+  expect(JSON.parse(files['/.toolbox/toolbox.json'] ?? '{}').tools.map((tool: { id: string }) => tool.id)).toEqual(['lint'])
+})
+
+test('the Add tab reads pnpm\'s workspace packages, and names a package.json it could not read', async ($, on) => {
+  const { values } = seedState(on, { tab: 'add' }, { isWritable: true })
+  const files: Record<string, string> = {
+    '/package.json': '{ "name": "root", "scripts": { "dev": "vite" }, }',
+    '/pnpm-workspace.yaml': "packages:\n  - 'apps/*'\n",
+    '/pnpm-lock.yaml': '',
+    '/apps/web/package.json': JSON.stringify({ name: '@x/web', scripts: { test: 'vitest' } }),
+  }
+  on('fs.exists', ($, e) => ({ value: (e.path in files || Object.keys(files).some(path => path.startsWith(`${e.path}/`))) as never }))
+  on('fs.read', ($, e) => ({ value: (files[e.path] ?? '') as never }))
+  on('fs.list', ($, e) => ({ value: (e.path === '/apps' ? [{ name: 'web', kind: 'dir', size: 0, mtimeMs: 0, isLink: false }] : []) as never }))
+  on('command.list', () => ({ value: [] as never }))
+  on('ui.open', () => ({ value: { isPlaced: true } as never }))
+  await $.command.run({ command: 'sc:toolbox', args: 'add', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } } as never)
+  expect((values.detected as { name: string; run: string }[]).map(task => [task.name, task.run])).toContainEqual(['test (@x/web)', 'pnpm run test'])
+  expect(values.unreadable).toEqual(['package.json'])
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /Could not read package\.json/ })).toBeDefined()
+  await ui.unmount()
 })

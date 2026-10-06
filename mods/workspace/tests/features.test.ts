@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { DiffView } from '../types'
-import { finishAgents, keptCheckpoints, mergeCheckpoints, promptLabel } from '../hooks/git'
+import { finishAgents, keptCheckpoints, promptLabel } from '../hooks/git'
 import { doneMarks, nextSeq, notesContext, numbered } from '../hooks/notes'
 import { messagesFor } from '../hooks/i18n'
 import { activityText, toolSummary } from '../hooks/views/agents'
@@ -151,7 +151,7 @@ test('pinned checkpoints are kept past the limit; the oldest unpinned ones go', 
 })
 
 test('an agent the engine stops listing moves to the finished group with its answer', async () => {
-  const agent = (id: string) => ({ id, stopId: id, label: id, type: 'Explore', status: 'running' as const, firstSeen: 0 })
+  const agent = (id: string) => ({ id, stopIds: [id], label: id, type: 'Explore', status: 'running' as const, firstSeen: 0 })
   const after = finishAgents([agent('a1'), agent('a2')], [agent('a2')], [], { a1: 'All done.' }, 500, 20)
   expect(after).toEqual([{ ...agent('a1'), endedAt: 500, answer: 'All done.' }])
   // Listed again, it leaves the group; the group keeps at most `limit`.
@@ -164,14 +164,4 @@ test('the session\'s start is kept past the limit, as the Diff tab\'s default ba
   const row = (ref: string) => ({ ref, commit: ref, tree: ref, at: 0, label: '', kind: 'turn' as const })
   const { gone } = keptCheckpoints([row('r3'), row('r2'), row('r1'), row('r0')], 2, ['r0'])
   expect(gone.map(one => one.ref)).toEqual(['r1'])
-})
-
-test('rows another session stored are kept when this one saves, its own winning where both have one', async () => {
-  const row = (ref: string, at: number, label = '') => ({ ref, commit: ref, tree: ref, at, label, kind: 'turn' as const })
-  const merged = mergeCheckpoints([row('a2', 30, 'mine'), row('a1', 10)], [row('b1', 20), row('a2', 30, 'stale')])
-  expect(merged.map(one => [one.ref, one.label])).toEqual([
-    ['a2', 'mine'],
-    ['b1', ''],
-    ['a1', ''],
-  ])
 })

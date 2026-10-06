@@ -1,7 +1,7 @@
 {
   "name": "sc",
   "displayName": "SimpleCORE Claude Mods",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "description": "Installs every SimpleCORE mod for Claude Code: account switching with usage limits in a status band, a workspace pane for agents, worktrees, checkpoints, notes, diffs and memory, and a toolbox that runs the project's tasks",
   "author": {

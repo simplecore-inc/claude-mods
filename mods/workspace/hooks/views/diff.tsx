@@ -5,7 +5,7 @@ import type { Locale, Messages } from '../i18n'
 import { clockOf, sinceText } from './checkpoints'
 import type { Tone } from '../shared/kit'
 import { Card, ChangeBar, ChangeCounts, Empty, IconButton, LinkButton, Section, SelectField, theme, Toned } from '../shared/kit'
-import { displayWidth, padCells, truncate } from '../shared/layout'
+import { displayWidth, padCells, printable, truncate } from '../shared/layout'
 
 export type DiffModel = {
   diff: DiffView | null
@@ -54,7 +54,7 @@ const NAME_WIDTH = 28
 
 /** A base as the header and the base dialog name it: `time  label`. */
 export function baseLabel(base: Pick<DiffView['base'], 'at' | 'label'>, now: number, locale: Locale): string {
-  return `${clockOf(base.at, now, locale)}  ${truncate(base.label, 40)}`
+  return `${clockOf(base.at, now, locale)}  ${truncate(printable(base.label), 40)}`
 }
 
 /** A checkpoint offered as a base, with what changed since it when that has been counted. */
@@ -110,7 +110,7 @@ export function commitPrompt(diff: DiffView, now: number, locale: Locale, m: Mes
   const files = diff.files
     .map(file => {
       const counts = file.added === null ? m.binary : `+${file.added} −${file.removed ?? 0}`
-      const path = file.from ? `${file.from} → ${file.path}` : file.path
+      const path = printable(file.from ? `${file.from} → ${file.path}` : file.path)
 
       return `- ${STATUS_MARK[file.status].letter} ${path} (${counts})`
     })
@@ -149,7 +149,7 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
   const countsWidth = 2 + addedWidth + 1 + removedWidth
   const pathRoom = Math.max(16, model.bodyColumns - 4 - 4 - CHANGE_BAR - countsWidth)
   // One column for every name, so the folders start together.
-  const nameWidth = Math.min(NAME_WIDTH, Math.max(...diff.files.map(file => displayWidth(file.path.split('/').pop() ?? file.path))))
+  const nameWidth = Math.min(NAME_WIDTH, Math.max(...diff.files.map(file => displayWidth(printable(file.path).split('/').pop() ?? file.path))))
 
   return (
     <Box key="diff" flexDirection="column">
@@ -185,7 +185,7 @@ export function DiffTab(ui: ElementTable, model: DiffModel, actions: DiffActions
             {diff.files.map(file => {
               const mark = STATUS_MARK[file.status]
               const cells = changeCells(file, largest)
-              const { name, folder } = splitPath(file.path, nameWidth, pathRoom)
+              const { name, folder } = splitPath(printable(file.path), nameWidth, pathRoom)
 
               return (
                 <Box key={`file-${file.path}`} justifyContent="space-between">

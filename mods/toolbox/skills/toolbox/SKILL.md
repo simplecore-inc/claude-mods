@@ -49,7 +49,7 @@ Whether the tools are shared is the person's choice, made in `.toolbox/.gitignor
 | `confirm` | no | `true` asks "Run <name>?" before each run. Set it on commands that cannot be taken back: `/clear`, `/reload-plugins`, a deploy, a database reset. A tool that asks for values already asks, so it needs no `confirm`. |
 | `group` | no | Where it came from (`npm`, `gradle`, `claude`, `custom`): informational. |
 
-A tool missing `name`, `kind` or `run` is left out and the pane names it as a problem; keep the file valid JSON.
+A tool missing `name`, `kind` or `run` is left out and the pane names it as a problem; keep the file valid JSON. The pane changes only the entry it saves or removes, so other entries, broken ones and fields it does not know stay as written; two entries given one `id` are run as `<id>` and `<id>-2`, so give each its own.
 
 ## Parameters
 

@@ -52,7 +52,7 @@ claude plugin test mods/<name>
 npx -p typescript tsc -p mods/<name>
 ```
 
-`tsc` reads the `tsconfig.json` the engine writes into the mod folder at every load. `sync.mjs --check` exits 1 when a manifest's version, a changelog copy or a shared copy differs from its source.
+`tsc` reads the `tsconfig.json` the engine writes into the mod folder at every load. `sync.mjs --check` exits 1 when a manifest's version, a changelog copy or a shared copy differs from its source, when a view styles an element itself, and when `hooks/i18n.ts` holds a message no hook reads.
 
 ## Releasing
 

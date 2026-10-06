@@ -1,7 +1,7 @@
 import type { ElementTable } from 'claude-code'
 
 import type { CheckpointRow } from '../../types'
-import { displayWidth, padCells, truncate } from '../shared/layout'
+import { displayWidth, padCells, printable, truncate } from '../shared/layout'
 import { promptLabel } from '../git'
 import { resetClock } from '../shared/time'
 import type { Locale, Messages } from '../i18n'
@@ -16,6 +16,8 @@ export type CheckpointsModel = {
   bodyColumns: number
   /** Rows shown before the rest are summed up in one line. */
   limit: number
+  /** Whether one is taken before every prompt (the `checkpointEveryPrompt` setting), or only when asked. */
+  isEveryPrompt: boolean
 }
 
 export type CheckpointsActions = {
@@ -46,7 +48,7 @@ export function clockOf(at: number, now: number, locale: Locale): string {
  * its prompt, else its kind when nothing readable is left.
  */
 export function checkpointLabel(row: Pick<CheckpointRow, 'label' | 'kind' | 'name'>, m: Messages): string {
-  return row.name?.trim() || promptLabel(row.label) || m.checkpointKind[row.kind]
+  return printable(row.name ?? '').trim() || promptLabel(row.label) || m.checkpointKind[row.kind]
 }
 
 /** What changed since a checkpoint, as its row shows it; `…` while it is being counted. */
@@ -71,8 +73,8 @@ export function CheckpointsTab(ui: ElementTable, model: CheckpointsModel, action
 
   return (
     <Box key="checkpoints" flexDirection="column">
-      {Section(ui, 'checkpoints-title', m.checkpointsTitle, m.checkpointsDetail(model.checkpoints.length))}
-      {model.checkpoints.length === 0 && Empty(ui, 'checkpoints-empty', [m.checkpointsEmpty, m.checkpointsEmptyHint])}
+      {Section(ui, 'checkpoints-title', m.checkpointsTitle, m.checkpointsDetail(model.checkpoints.length, model.isEveryPrompt))}
+      {model.checkpoints.length === 0 && Empty(ui, 'checkpoints-empty', [m.checkpointsEmpty, m.checkpointsEmptyHint(model.isEveryPrompt)])}
       {shown.length > 0 &&
         Card(
           ui,

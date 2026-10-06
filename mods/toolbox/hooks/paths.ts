@@ -2,6 +2,7 @@
  * Path suggestions as a person types, and the output of a run as the log
  * dialog draws it. Pure: the hooks module lists folders and feeds output in.
  */
+import { printable } from './shared/layout'
 
 /** A `*`/`?` glob as a test on a file name; every name passes an empty glob. */
 export function globTest(glob: string | undefined): (name: string) => boolean {
@@ -46,10 +47,65 @@ export function pathSuggestions(
 /** Lines of a run's output kept to draw: the log file holds every one. */
 export const LOG_LINES_KEPT = 2_000
 
+/** The most a run's log file keeps, in UTF-8 bytes: its newest part, well under the 4 MiB a write takes. */
+export const LOG_FILE_BYTES = 3_000_000
+
+/** The bytes a string takes in UTF-8. */
+function utf8Size(text: string): number {
+  let size = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index)
+    if (code < 0x80) size += 1
+    else if (code < 0x800) size += 2
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      size += 4
+      index += 1
+    } else size += 3
+  }
+
+  return size
+}
+
+/**
+ * The newest part of a log's text that fits `bytes` in UTF-8, from the start
+ * of a line. Output in Korean takes three bytes a character, so a cut counted
+ * in characters passes the engine's 4 MiB write limit, and the file is then
+ * written no more.
+ */
+export function newestPart(text: string, bytes: number): string {
+  if (utf8Size(text) <= bytes) return text
+  let start = text.length
+  let size = 0
+  while (start > 0) {
+    const from = text.lastIndexOf('\n', start - 2) + 1
+    const lineSize = utf8Size(text.slice(from, start))
+    if (size + lineSize > bytes) break
+    size += lineSize
+    start = from
+  }
+
+  return text.slice(start)
+}
+
+/**
+ * A line as a terminal shows it once a program has rewritten it with carriage
+ * returns (a progress bar): its newest form, the text after the last return
+ * that has any.
+ */
+export function rewritten(line: string): string {
+  const forms = line.split('\r')
+  for (let index = forms.length - 1; index >= 0; index -= 1) if (forms[index] !== '') return forms[index] ?? ''
+
+  return ''
+}
+
 /**
  * A run's output as it arrives, kept as whole lines: a piece that ends mid-line
- * waits for the rest. The newest `LOG_LINES_KEPT` lines are kept to draw, and
- * every line goes to `pending` for the log file.
+ * waits for the rest. Each whole line is kept as a terminal would show it, its
+ * escape sequences and control characters removed (cleaned whole, so a
+ * sequence cut between two pieces leaves nothing behind). The newest
+ * `LOG_LINES_KEPT` lines are kept to draw, and every line goes to `pending`
+ * for the log file.
  */
 export class LogBuffer {
   lines: string[] = []
@@ -58,12 +114,20 @@ export class LogBuffer {
 
   /** Takes a piece of output as it came, in any size. */
   push(text: string): void {
-    const parts = (this.partial + text.replace(/\r\n?/g, '\n')).split('\n')
-    this.partial = parts.pop() ?? ''
+    const parts = (this.partial + text).replace(/\r\n/g, '\n').split('\n')
+    const rest = parts.pop() ?? ''
+    // A line rewritten in place keeps only its newest form; a return at the end may be half of CRLF.
+    this.partial = rest.endsWith('\r') ? `${rewritten(rest)}\r` : rewritten(rest)
     if (parts.length === 0) return
-    this.lines.push(...parts)
+    const whole = parts.map(line => printable(rewritten(line)))
+    this.lines.push(...whole)
     if (this.lines.length > LOG_LINES_KEPT) this.lines.splice(0, this.lines.length - LOG_LINES_KEPT)
-    this.pending += `${parts.join('\n')}\n`
+    this.pending += `${whole.join('\n')}\n`
+  }
+
+  /** The line being written now, in its newest form: a progress bar before its newline comes. */
+  get current(): string {
+    return printable(rewritten(this.partial))
   }
 
   /** The line still being written, once the run has ended. */
@@ -80,25 +144,26 @@ export class LogBuffer {
     return text
   }
 
-  /** The lines to draw ending at `last` (the newest when absent), as many as fit `limit` characters and `lines` lines. */
+  /**
+   * The lines to draw ending at `last` (the newest when absent), as many as fit
+   * `limit` characters and `lines` lines. Ending at the newest, the line being
+   * written now is drawn below them, so a progress bar shows as it moves.
+   */
   window(limit: number, last?: number, lines = Infinity): { text: string; first: number; last: number } {
     const end = Math.min(this.lines.length, last ?? this.lines.length)
+    const live = last === undefined || last >= this.lines.length ? this.current : ''
     let start = end
-    let size = 0
-    while (start > 0 && end - start < lines) {
+    let size = live === '' ? 0 : live.length + 1
+    const room = live === '' ? lines : lines - 1
+    while (start > 0 && end - start < room) {
       const line = this.lines[start - 1] ?? ''
       if (size + line.length + 1 > limit) break
       size += line.length + 1
       start -= 1
     }
 
-    return { text: this.lines.slice(start, end).join('\n'), first: start, last: end }
+    return { text: [...this.lines.slice(start, end), ...(live === '' ? [] : [live])].join('\n'), first: start, last: end }
   }
-}
-
-/** Escape sequences a program writes for a terminal (colours, cursor moves): the log draws text alone. */
-export function stripAnsi(text: string): string {
-  return text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*(\u0007|\u001b\\)|\u001b[@-Z\\-_]/g, '')
 }
 
 /** A share done in a line of output: `45%`, or `3/10` and `[3/10]` read as a count of a total. */

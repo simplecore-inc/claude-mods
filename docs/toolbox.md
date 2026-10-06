@@ -28,8 +28,8 @@ The plugin ships the `toolbox` skill, so Claude can write or change `toolbox.jso
 | Kind | When run |
 | --- | --- |
 | Shell | Runs the command in the project's folder, or in `cwd` under it. Its output goes to a log; `■` stops it with everything it started. |
-| Claude | Runs a slash command such as `/clear` or `/compact`. It waits until Claude has finished answering. |
-| Prompt | Puts the text in the prompt box. Set **When run** to **Send it at once** to send it instead. |
+| Claude | Runs a slash command such as `/clear` or `/compact`. It waits until Claude has finished answering; pressed again while it waits, it is not queued twice. |
+| Prompt | Puts the text in the prompt box, at the cursor beside what you were typing. Set **When run** to **Send it at once** to send it instead. |
 
 ## The buttons
 
@@ -80,14 +80,16 @@ In a shell command a value is quoted as one word, so a space or a quote in it is
 
 **Add** offers what it finds, filtered by what you type:
 
-- the tasks of the project's build files: npm (workspace packages included), Vite, Maven, Gradle, Cargo, make, just, Docker Compose, Go and Python. Gradle lists its common tasks; **Load every Gradle task** asks Gradle for all of them.
+- the tasks of the project's build files: npm (workspace packages included, as `package.json` or `pnpm-workspace.yaml` names them), Vite, Maven, Gradle, Cargo, make, just, Docker Compose, Go and Python. Gradle lists its common tasks; **Load every Gradle task** asks Gradle for all of them. A just recipe's parameters are asked at each run, a default offered first and a `+args` or `*args` one put in as typed. A `package.json` that is not valid JSON is named above the list, and its scripts are left out until it is mended; the other build files are still read.
 - Claude Code's commands, built-in ones first, then your own, plugins' and skills'.
 - a shell command or a prompt of your own.
 
-Pressing one opens it to edit before it is saved.
+Pressing one opens it to edit before it is saved. Saving, or removing a tool, changes that tool alone in `toolbox.json` as the file stands then: a tool added to the file since the pane opened, an entry the pane cannot read and a field it does not know all stay. Two tools given one `id` are told apart, the second as `<id>-2`.
 
 ## The log
 
 ![A running tool's log](images/toolbox-log.svg)
 
-A shell tool's log opens in a dialog and follows the output as it arrives. **▲ Older** and **▼ Newer** page through it, **Follow** goes back to the newest line, **■ Stop** ends the run, and once it has ended **▶ Run again** starts it again. A log left from an earlier session opens from its file. Every line is also written to `.toolbox/logs/<id>.log`, which keeps the last 3 MB.
+A shell tool's log opens in a dialog and follows the output as it arrives. **▲ Older** and **▼ Newer** page through it, **Follow** goes back to the newest line, **■ Stop** ends the run, and once it has ended **▶ Run again** starts it again. A log left from an earlier session opens from its file. The log shows text alone: colours, cursor moves and other control characters a program writes for a terminal are left out, and a line a program rewrites in place (a progress bar) shows as it now stands, at the bottom while it is being rewritten. Every line is also written to `.toolbox/logs/<id>.log`, which keeps its newest 3 MB.
+
+A run goes on through `/clear`: the toolbox, the status band and the run's log show it as running in the new conversation too.

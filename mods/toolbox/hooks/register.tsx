@@ -2,15 +2,16 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { DetectedTask, RunStatus, Tab, Tool, ToolKind, ToolParam } from '../types'
-import { BUILD_FILES, detectTasks, MARKER_FILES, parseGradleTaskList, workspaceGlobs } from './detect'
+import { BUILD_FILES, detectTasks, MARKER_FILES, parseGradleTaskList, pnpmWorkspaceGlobs, unreadableFiles, workspaceGlobs } from './detect'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
-import { LogBuffer, pathSuggestions, progressOf, splitTyped, stripAnsi } from './paths'
+import { LOG_FILE_BYTES, LogBuffer, newestPart, pathSuggestions, progressOf, splitTyped } from './paths'
 import { isBesideOtherPanes } from './shared/panes'
 import { Dialog, FormDialog, Header, LogDialog, paneTitle, TabBar, Tiles } from './shared/kit'
 import type { FormField, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
 import {
+  applyToolChange,
   askedParams,
   CONFIRMED_COMMANDS,
   DEFAULT_IGNORE,
@@ -21,12 +22,11 @@ import {
   summarize,
   startingValues,
   TOOLBOX_DIR,
-  toolId,
   TOOLS_FILE,
-  toolsText,
   valuesProblem,
   workingFolder,
 } from './tools'
+import type { ToolChange } from './tools'
 import { AddTab } from './views/add'
 import { elapsed, QUICK_BEAT_MS, QuickView, runText, ToolsTab } from './views/tools'
 
@@ -39,6 +39,7 @@ const seenAt = atom({ plugin: 'sc-toolbox', key: 'seenAt' } as const, 0)
 const paneOpen = atom({ plugin: 'sc-toolbox', key: 'paneOpen' } as const, false)
 const logTick = atom({ plugin: 'sc-toolbox', key: 'logTick' } as const, 0)
 const detected = atom({ plugin: 'sc-toolbox', key: 'detected' } as const, null)
+const unreadable = atom({ plugin: 'sc-toolbox', key: 'unreadable' } as const, [])
 const commands = atom({ plugin: 'sc-toolbox', key: 'commands' } as const, null)
 const addQuery = atom({ plugin: 'sc-toolbox', key: 'addQuery' } as const, '')
 const dialog = atom({ plugin: 'sc-toolbox', key: 'dialog' } as const, null)
@@ -59,9 +60,7 @@ const MOD_NAME = 'Toolbox'
 const LOG_TICK_MS = 200
 /** How often a running tool's log file is written. */
 const LOG_WRITE_MS = 2000
-/** The most of a run's output the log file keeps: the newest, under the engine's 4 MiB a write takes. */
-const LOG_FILE_CHARS = 3_000_000
-/** The characters of output the log dialog draws at once, under the 10,000 a Code element takes. */
+/** The characters of output the log dialog draws at once: about a pane's worth, paged with Older and Newer. */
 const LOG_WINDOW_CHARS = 6_000
 /** Lines of the log drawn at once: what fits the pane with the dialog's title, status and buttons. */
 const LOG_WINDOW_LINES = 22
@@ -106,6 +105,10 @@ const buffers = new Map<string, LogBuffer>()
 const running = new Map<string, { stop: () => void; group?: number; stopped?: boolean }>()
 /** Each tool's log file text as written last, so a write adds the new lines. */
 const logFiles = new Map<string, string>()
+/** How each run this module started last stood: a /clear empties the session's state while they go on. */
+const held = new Map<string, RunStatus>()
+/** How long after a /clear ends the old session the new one is taken up, once the engine has switched ids. */
+const CLEAR_SETTLE_MS = 300
 /** The line the log dialog ends at when it does not follow the newest. */
 let logLast: number | undefined
 let tickTimer: { cancel: () => void } | undefined
@@ -156,14 +159,19 @@ async function loadTools($: EngineInterface): Promise<void> {
 }
 
 /**
- * Writes the tools to `.toolbox/toolbox.json`. Making the folder writes its
+ * Saves one change to `.toolbox/toolbox.json` as the file holds it now, then
+ * reads the tools back: an edit made to the file since the pane read it (by
+ * hand, or by Claude through the toolbox skill), an entry the pane cannot read
+ * and a field it does not know all stay. Making the folder writes its
  * `.gitignore` too, keeping the logs and the remembered values out of git;
  * whether the tools are shared is the person's to decide there.
  */
-async function saveTools($: EngineInterface, list: Tool[]): Promise<void> {
+async function changeTools($: EngineInterface, change: ToolChange): Promise<void> {
   await ensureIgnore($)
-  await $.fs.write(toolboxPath(TOOLS_FILE), toolsText(list))
-  await update($, tools, () => list)
+  const path = toolboxPath(TOOLS_FILE)
+  const text = (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
+  await $.fs.write(path, applyToolChange(typeof text === 'string' ? text : undefined, change))
+  await loadTools($)
 }
 
 /**
@@ -210,16 +218,16 @@ async function detect($: EngineInterface): Promise<void> {
     if (BUILD_FILES.includes(relative) || relative.endsWith('package.json')) files[relative] = await $.fs.read(path)
   }
   for (const name of [...BUILD_FILES, ...MARKER_FILES]) await readIfThere(name)
-  // A workspace's packages, by their folder globs (`packages/*` and `apps/web` alike).
-  if (files['package.json']) {
-    for (const glob of workspaceGlobs(files['package.json'])) {
-      const base = glob.replace(/\/\*+$/, '')
-      if (glob.endsWith('*') && (await $.fs.exists(`${root}/${base}`))) {
-        for (const entry of await $.fs.list(`${root}/${base}`)) if (entry.kind === 'dir') await readIfThere(`${base}/${entry.name}/package.json`)
-      } else await readIfThere(`${glob}/package.json`)
-    }
+  // A workspace's packages, by their folder globs (`packages/*` and `apps/web` alike), as package.json or pnpm names them.
+  const globs = [...workspaceGlobs(files['package.json'] ?? '{}'), ...pnpmWorkspaceGlobs(files['pnpm-workspace.yaml'] ?? '')]
+  for (const glob of [...new Set(globs)]) {
+    const base = glob.replace(/\/\*+$/, '')
+    if (glob.endsWith('*') && (await $.fs.exists(`${root}/${base}`))) {
+      for (const entry of await $.fs.list(`${root}/${base}`)) if (entry.kind === 'dir') await readIfThere(`${base}/${entry.name}/package.json`)
+    } else await readIfThere(`${glob}/package.json`)
   }
   await update($, detected, () => detectTasks(files, exists))
+  await update($, unreadable, () => unreadableFiles(files))
 }
 
 /** Gradle's own whole task list, asked of Gradle once, added to what was found. */
@@ -259,8 +267,7 @@ function scheduleTick($: EngineInterface): void {
 async function writeLog($: EngineInterface, id: string): Promise<void> {
   const added = buffers.get(id)?.takePending() ?? ''
   if (added === '') return
-  const text = `${logFiles.get(id) ?? ''}${added}`
-  const kept = text.length > LOG_FILE_CHARS ? text.slice(text.length - LOG_FILE_CHARS) : text
+  const kept = newestPart(`${logFiles.get(id) ?? ''}${added}`, LOG_FILE_BYTES)
   logFiles.set(id, kept)
   await ensureIgnore($)
   await $.fs.write(toolboxPath(`logs/${id}.log`), kept)
@@ -280,7 +287,9 @@ async function loadLog($: EngineInterface, id: string): Promise<void> {
 }
 
 async function setRun($: EngineInterface, id: string, change: (current: RunStatus | undefined) => RunStatus): Promise<void> {
-  await update($, runs, all => ({ ...all, [id]: change(all[id]) }))
+  const all = await update($, runs, current => ({ ...current, [id]: change(current[id]) }))
+  const status = all[id]
+  if (status) held.set(id, status)
   await refreshSummary($)
 }
 
@@ -322,7 +331,7 @@ async function runShell($: EngineInterface, tool: Tool, command: string): Promis
         }
       }
       if (text !== '') {
-        buffer.push(stripAnsi(text))
+        buffer.push(text)
         scheduleTick($)
       }
     }
@@ -377,6 +386,8 @@ async function runTool($: EngineInterface, tool: Tool, values: Record<string, st
     return m.started(tool.name)
   }
   if (tool.kind === 'claude') {
+    // Already waiting for the session to be idle: a second press would run it twice.
+    if (waiting.has(tool.id)) return m.alreadyQueued(tool.name)
     const [name = '', ...rest] = command.trim().replace(/^\//, '').split(/\s+/)
     const startedAt = await $.clock.now()
     await setRun($, tool.id, () => ({ state: 'queued', startedAt, command }))
@@ -386,13 +397,15 @@ async function runTool($: EngineInterface, tool: Tool, values: Record<string, st
       .run({ command: name, args: rest.join(' ') })
       .then(async () => {
         waiting.delete(tool.id)
-        await setRun($, tool.id, current => ({ ...(current ?? { startedAt, command }), state: 'done', endedAt: Date.now() }))
+        const endedAt = await $.clock.now()
+        await setRun($, tool.id, current => ({ ...(current ?? { startedAt, command }), state: 'done', endedAt }))
       })
       .catch(async (error: unknown) => {
         waiting.delete(tool.id)
         debug($, error)
         $.ui.toast(m.failedToast(tool.name, ''))
-        await setRun($, tool.id, current => ({ ...(current ?? { startedAt, command }), state: 'failed', endedAt: Date.now() }))
+        const endedAt = await $.clock.now()
+        await setRun($, tool.id, current => ({ ...(current ?? { startedAt, command }), state: 'failed', endedAt }))
       })
 
     return m.queuedToast(tool.name)
@@ -402,7 +415,8 @@ async function runTool($: EngineInterface, tool: Tool, values: Record<string, st
 
     return m.sent
   }
-  await $.prompt.fill({ text: command, mode: 'replace' })
+  // Put in at the cursor, so what the person was typing stays.
+  await $.prompt.fill({ text: command, mode: 'insert' })
 
   return m.filled
 }
@@ -413,6 +427,12 @@ async function runTool($: EngineInterface, tool: Tool, values: Record<string, st
 async function openPane($: EngineInterface, next?: Tab | 'quick', focus = true): Promise<void> {
   if (next === 'quick') await update($, tab, () => 'tools')
   else if (next) await update($, tab, () => next)
+  // Opened to show the tools: a dialog left from a draw the engine refused, or from a closed pane, goes.
+  if ((await read($, dialog)) !== null) {
+    await update($, dialog, () => null)
+    await update($, suggest, () => null)
+    await update($, focused, () => null)
+  }
   quick = next === 'quick'
   // Opening the toolbox shows every failure, so the band stops counting them.
   const openedAt = await $.clock.now()
@@ -450,7 +470,7 @@ async function closePane($: EngineInterface): Promise<void> {
 }
 
 /** The fields of the add-or-edit dialog, from the draft: the tool's own, then a few for each `{{name}}` its command holds. */
-function editFields(values: Record<string, string>, kind: ToolKind, set: (key: string, value: string) => void): FormField[] {
+function editFields(values: Record<string, string>, kind: ToolKind, set: (key: string, value: string) => Promise<void>): FormField[] {
   const field = (key: string, label: string, extra: Partial<FormField> = {}): FormField => ({ key, label, value: values[key] ?? '', onInput: value => set(key, value), ...extra })
   const fields: FormField[] = [field('name', m.fieldName), field('run', m.fieldRun[kind])]
   if (kind === 'shell') fields.push(field('cwd', m.fieldCwd, { placeholder: '.' }))
@@ -516,6 +536,26 @@ function fromDraft(id: string, values: Record<string, string>, group?: string): 
   }
 }
 
+/**
+ * Fills the state a session draws from: the project's tools, whether the
+ * pane is open, and the runs. A reload leaves runs this load does not hold:
+ * none stays marked running or waiting with nothing behind it. A /clear
+ * leaves no runs in the state at all: those this module still holds are put
+ * back as they stand.
+ */
+async function adoptSession($: EngineInterface): Promise<void> {
+  root = (await $.session.root()).replaceAll('\\', '/')
+  await loadTools($)
+  const now = await $.clock.now()
+  // The pane as the engine keeps it, open or not.
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+  await update($, paneOpen, () => isOpen)
+  const isHeld = (id: string) => running.has(id) || waiting.has(id)
+  const going = Object.fromEntries([...held].filter(([id]) => isHeld(id)))
+  await update($, runs, all => ({ ...going, ...settleRuns(all ?? {}, isHeld, now) }))
+  await refreshSummary($)
+}
+
 // ── hooks ─────────────────────────────────────────────────────────────────
 
 export const register: Register = on => {
@@ -525,17 +565,22 @@ export const register: Register = on => {
     m = messagesFor(locale)
     release = await readRelease($)
     isWindows = (await $.env.get('OS')) === 'Windows_NT'
-    root = (await $.session.root()).replaceAll('\\', '/')
-    await loadTools($)
-    // A reload leaves runs this load does not hold: none stays marked running or waiting with nothing behind it.
-    const now = await $.clock.now()
-    // A reload finds the pane as the engine keeps it, open or not.
-    const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
-    await update($, paneOpen, () => isOpen)
-    await update($, runs, all => settleRuns(all, id => running.has(id) || waiting.has(id), now))
-    await refreshSummary($)
+    await adoptSession($)
 
     return next(e)
+  })
+
+  // A /clear goes on in this process under a new session id, with no session.start and none of
+  // the session's state: the new session is taken up here, its tools and the runs still going.
+  on('session.end', async ($, e, next) => {
+    const result = await next(e)
+    if (e.reason === 'clear') {
+      $.clock.after(CLEAR_SETTLE_MS, () => {
+        void adoptSession($).catch((error: unknown) => debug($, error))
+      })
+    }
+
+    return result
   })
 
   // Esc (or the close mark) while a dialog asks closes the dialog and keeps the pane.
@@ -642,25 +687,29 @@ export const register: Register = on => {
     }
     const asked = await read($, dialog)
     const values = await read($, draft)
-    const setDraft = (key: string, value: string) => {
-      void update($, draft, current => ({ ...current, [key]: value })).catch((error: unknown) => debug($, error))
-    }
+    // Settles once the value is kept, so Enter in a field submits what was typed.
+    const setDraft = (key: string, value: string): Promise<void> =>
+      update($, draft, current => ({ ...current, [key]: value }))
+        .then(() => undefined)
+        .catch((error: unknown) => debug($, error))
 
     if (asked?.kind === 'ask' && byId(asked.id)) {
       const tool = byId(asked.id) as Tool
       const offered = await read($, suggest)
       const fields: FormField[] = askedParams(tool).map(name => {
         const param = tool.params?.[name]
-        const onInput = (value: string) => {
-          setDraft(name, value)
+        const onInput = (value: string): Promise<void> => {
+          const kept = setDraft(name, value)
           // A path is offered as it is typed: the folder typed into is listed.
-          if (param?.type !== 'path') return
+          if (param?.type !== 'path') return kept
           void (async () => {
             const { folder } = splitTyped(value)
             const path = folder === '' ? root : `${root}/${folder}`
             const entries = (await $.fs.exists(path)) ? await $.fs.list(path) : []
             await update($, suggest, () => ({ field: name, items: pathSuggestions(value, entries, { pathKind: param.pathKind, glob: param.glob }) }))
           })().catch((error: unknown) => debug($, error))
+
+          return kept
         }
 
         return {
@@ -765,11 +814,11 @@ export const register: Register = on => {
             label: m.save,
             onPress: act(async () => {
               const current = await read($, draft)
-              const id = existing?.id ?? toolId(current.name ?? '', list.map(tool => tool.id))
-              const tool = fromDraft(id, { ...current, kind }, existing?.group ?? current.group)
+              const tool = fromDraft(existing?.id ?? '', { ...current, kind }, existing?.group ?? current.group)
               if (tool.name === '' || tool.run === '') return m.nameMissing
-              const next = existing ? list.map(one => (one.id === id ? tool : one)) : [...list, tool]
-              await saveTools($, next)
+              // A new tool takes an id no tool in the file holds as it is now.
+              const { id: _unsaved, ...added } = tool
+              await changeTools($, existing ? { put: tool } : { add: added })
               await dismiss()
 
               return existing ? m.saved(tool.name) : m.added(tool.name)
@@ -819,7 +868,7 @@ export const register: Register = on => {
           onPress: act(async () => {
             await dismiss()
             if (isRemove) {
-              await saveTools($, list.filter(one => one.id !== tool.id))
+              await changeTools($, { remove: tool.id })
 
               return m.removed(tool.name)
             }
@@ -839,7 +888,7 @@ export const register: Register = on => {
     const now = Math.max(await $.clock.now(), await read($, logTick))
     // How far each running shell tool says it has got.
     const activity = Object.fromEntries(
-      [...buffers.entries()].map(([id, buffer]) => [id, { progress: running.has(id) ? progressOf(buffer.lines) : undefined }]),
+      [...buffers.entries()].map(([id, buffer]) => [id, { progress: running.has(id) ? progressOf([...buffer.lines, buffer.current]) : undefined }]),
     )
     const model = { tools: list, runs: await read($, runs), activity, error: await read($, toolsError), path: `${TOOLBOX_DIR}/${TOOLS_FILE}`, now, m, bodyColumns }
     const toolActions = {
@@ -893,6 +942,7 @@ export const register: Register = on => {
             ui,
             {
               detected: await read($, detected),
+              unreadable: await read($, unreadable),
               commands: await read($, commands),
               query: await read($, addQuery),
               hasGradle: (await read($, detected))?.some(task => task.source === 'gradle') === true,

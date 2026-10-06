@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { composeServices, detectTasks, gradleProjects, packageRunner, parseGradleTaskList, workspaceGlobs } from '../hooks/detect'
-import { globTest, LogBuffer, pathSuggestions, progressOf, stripAnsi } from '../hooks/paths'
+import { composeServices, detectTasks, gradleProjects, packageRunner, parseGradleTaskList, pnpmWorkspaceGlobs, unreadableFiles, workspaceGlobs } from '../hooks/detect'
+import { globTest, LOG_FILE_BYTES, LogBuffer, newestPart, pathSuggestions, progressOf } from '../hooks/paths'
 import { elapsed, progressIcon, quickSummary, quickTile, runText } from '../hooks/views/tools'
 import { messagesFor } from '../hooks/i18n'
-import { askedParams, fill, paramNames, parseTools, settleRuns, summarize, shellQuote, startingValues, toolId, toolsText, valuesProblem, workingFolder } from '../hooks/tools'
+import { applyToolChange, askedParams, fill, paramNames, parseTools, settleRuns, summarize, shellQuote, startingValues, toolId, valuesProblem, workingFolder } from '../hooks/tools'
 
 describe('a tool\'s command', () => {
   test('names its parameters once each, in order, raw or not', async () => {
@@ -39,7 +39,9 @@ test('the tools file keeps what is whole and names what is not', async () => {
   const { tools, problems } = parseTools(text)
   expect(tools.map(tool => [tool.id, tool.name])).toEqual([['dev', 'dev']])
   expect(problems).toEqual(['tools[1]', 'tools[2]'])
-  expect(parseTools(toolsText(tools)).tools).toEqual(tools)
+  // A tool saved and read back is the same tool.
+  const [dev] = tools
+  if (dev) expect(parseTools(applyToolChange(undefined, { put: dev })).tools).toEqual(tools)
   expect(toolId('Dev Server!', ['dev-server'])).toBe('dev-server-2')
 })
 
@@ -126,7 +128,29 @@ describe('paths and logs', () => {
     expect(buffer.window(10)).toEqual({ text: 'two\nthree', first: 1, last: 3 })
     expect(buffer.window(9)).toEqual({ text: 'three', first: 2, last: 3 })
     expect(buffer.window(100, undefined, 1)).toEqual({ text: 'three', first: 2, last: 3 })
-    expect(stripAnsi('\u001b[32mok\u001b[0m')).toBe('ok')
+  })
+
+  test('output is cleaned a whole line at a time: an escape cut between pieces, a bell and a backspace leave nothing', async () => {
+    const buffer = new LogBuffer()
+    buffer.push('ok \u001b[3')
+    buffer.push('2mgreen\u001b[0m\u0007\n')
+    buffer.push('done\u001b(B\u001b[m spin|\b/\b-\b\n')
+    expect(buffer.lines).toEqual(['ok green', 'done spin|/-'])
+    expect(buffer.takePending()).toBe('ok green\ndone spin|/-\n')
+  })
+
+  test('a line a program rewrites with carriage returns is kept as the terminal shows it, and read while it is rewritten', async () => {
+    const buffer = new LogBuffer()
+    buffer.push('start\n')
+    for (let done = 0; done <= 100; done += 10) buffer.push(`\rDownloading ${done}%`)
+    // Still being rewritten: the newest form shows below the whole lines, and how far it has got is read from it.
+    expect(buffer.lines).toEqual(['start'])
+    expect(buffer.current).toBe('Downloading 100%')
+    expect(buffer.window(100).text).toBe('start\nDownloading 100%')
+    expect(progressOf([...buffer.lines, buffer.current])).toBe(100)
+    buffer.push('\r\n')
+    expect(buffer.lines).toEqual(['start', 'Downloading 100%'])
+    expect(buffer.current).toBe('')
   })
 })
 
@@ -185,4 +209,81 @@ test('a run says how long it took and how long ago, and the quick view sums up w
   expect(quickSummary({}, m).text).toMatch(/^Press a tile to run it/)
   // The band counts only failures after the toolbox was last opened.
   expect(summarize(runs, 20)).toEqual({ running: 1, waiting: 0, failed: 1 })
+})
+
+test('two tools given one id are told apart: the second takes the next free one', async () => {
+  const { tools } = parseTools(JSON.stringify({ tools: [{ id: 'dev', name: 'a', kind: 'shell', run: 'x' }, { id: 'dev', name: 'b', kind: 'shell', run: 'y' }, { name: 'dev', kind: 'shell', run: 'z' }] }))
+  expect(tools.map(tool => tool.id)).toEqual(['dev', 'dev-2', 'dev-3'])
+})
+
+describe('a change saved to the tools file', () => {
+  const FILE = JSON.stringify(
+    {
+      version: 1,
+      note: 'kept',
+      tools: [
+        { id: 'dev', name: 'dev', kind: 'shell', run: 'pnpm dev', cwd: 'apps/web', description: 'a field the pane does not know' },
+        { name: 'broken', kind: 'nope', run: 'x' },
+        { name: 'Added By Hand', kind: 'shell', run: 'make' },
+      ],
+    },
+    null,
+    2,
+  )
+
+  test('an edit changes that tool alone: fields it does not know, broken entries and tools added since stay, a field it cleared goes', async () => {
+    const data = JSON.parse(applyToolChange(FILE, { put: { id: 'dev', name: 'dev server', kind: 'shell', run: 'pnpm run dev' } }))
+    expect(data.note).toBe('kept')
+    expect(data.tools).toEqual([
+      { id: 'dev', name: 'dev server', kind: 'shell', run: 'pnpm run dev', description: 'a field the pane does not know' },
+      { name: 'broken', kind: 'nope', run: 'x' },
+      { name: 'Added By Hand', kind: 'shell', run: 'make' },
+    ])
+  })
+
+  test('a removal takes that tool alone, found by the id it goes by; a new tool goes last under an id no tool holds', async () => {
+    const removed = JSON.parse(applyToolChange(FILE, { remove: 'added-by-hand' }))
+    expect(removed.tools.map((tool: { name: string }) => tool.name)).toEqual(['dev', 'broken'])
+    const added = JSON.parse(applyToolChange(FILE, { add: { name: 'Dev', kind: 'shell', run: 'pnpm dev' } }))
+    expect(added.tools.at(-1)).toEqual({ id: 'dev-2', name: 'Dev', kind: 'shell', run: 'pnpm dev' })
+  })
+
+  test('with no file yet the first tool makes one; a file that is not JSON is refused, never written over', async () => {
+    expect(JSON.parse(applyToolChange(undefined, { add: { name: 'Build', kind: 'shell', run: 'make' } }))).toEqual({ version: 1, tools: [{ id: 'build', name: 'Build', kind: 'shell', run: 'make' }] })
+    expect(() => applyToolChange('{ "tools": [', { remove: 'x' })).toThrow()
+  })
+})
+
+describe('build files that are hard to read', () => {
+  test('a package.json that is no JSON leaves out its own scripts, is named, and every other build file is still read', async () => {
+    const files = { 'package.json': '{ "scripts": { "dev": "vite" }, }', 'Cargo.toml': '[package]\nname = "x"\n' }
+    const tasks = detectTasks(files, new Set(['vite.config.ts']))
+    expect(tasks.some(task => task.source === 'cargo')).toBe(true)
+    expect(unreadableFiles(files)).toEqual(['package.json'])
+    expect(workspaceGlobs('{ broken')).toEqual([])
+  })
+
+  test('pnpm\'s workspace packages are read from pnpm-workspace.yaml, an excluded folder left out', async () => {
+    expect(pnpmWorkspaceGlobs("packages:\n  - 'apps/*'\n  - \"packages/**\"\n  - '!**/test/**'\n  - tools/cli\ncatalog:\n  react: ^19\n")).toEqual(['apps/*', 'packages/**', 'tools/cli'])
+    expect(pnpmWorkspaceGlobs('')).toEqual([])
+  })
+
+  test('a just recipe\'s parameters are asked at each run: a default offered first, a variadic one as typed', async () => {
+    const tasks = detectTasks({ justfile: "test +args:\n  cargo test {{args}}\nserve $port='8080' *flags:\n  x\n" }, new Set())
+    expect(tasks.map(task => task.run)).toEqual(['just test {{args|raw}}', 'just serve {{port}} {{flags|raw}}'])
+    expect(tasks[1]?.params).toEqual({ port: { type: 'text', mode: 'ask', value: '8080' }, flags: { type: 'text', mode: 'ask' } })
+  })
+})
+
+test('a log file keeps its newest lines within its bytes in UTF-8, from a line\'s start, however many bytes a character takes', async () => {
+  const line = '> Task :app:compileJava 경고: 사용되지 않는 API를 사용합니다. 자세한 내용은 -Xlint:deprecation 옵션으로 다시 컴파일하세요.\n'
+  const text = line.repeat(20_000)
+  const kept = newestPart(text, 1_000_000)
+  expect(new TextEncoder().encode(kept).length).toBeLessThanOrEqual(1_000_000)
+  expect(new TextEncoder().encode(kept).length).toBeGreaterThan(1_000_000 - new TextEncoder().encode(line).length)
+  expect(text.endsWith(kept)).toBe(true)
+  expect(kept.startsWith('> Task')).toBe(true)
+  expect(newestPart('short\n', 1_000_000)).toBe('short\n')
+  // Under the engine's 4 MiB a write takes, by a margin.
+  expect(LOG_FILE_BYTES).toBeLessThan(4 * 1024 * 1024)
 })

@@ -3,6 +3,7 @@ import type { ElementTable } from 'claude-code'
 import type { Note } from '../../types'
 import type { Messages } from '../i18n'
 import { Card, Empty, IconButton, InputFrame, Section, SubLine, theme, TileButton, Toggle } from '../shared/kit'
+import { printable } from '../shared/layout'
 
 export type NotesModel = {
   notes: Note[]
@@ -46,7 +47,7 @@ export function NotesTab(ui: ElementTable, model: NotesModel, actions: NotesActi
             {/* Its number is how Claude names it: `[done N3]`. */}
             {note.seq !== undefined && <Text dimColor>{`N${note.seq}`}</Text>}
             <Text dimColor={note.isDone} strikethrough={note.isDone} wrap="wrap">
-              {note.text}
+              {printable(note.text)}
             </Text>
           </Box>
           <Box gap={2} flexShrink={0}>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { fenceAfter, frontmatterOf, importsOf, markdownPages, MARKDOWN_LIMIT, reflow, normalize, outlineOf, pageOfLine, searchMemory } from '../hooks/memory'
+import { fenceAfter, frontmatterOf, importsOf, isPathRule, markdownPages, MARKDOWN_LIMIT, reflow, normalize, outlineOf, pageOfLine, searchMemory } from '../hooks/memory'
 
 describe('a memory file read', () => {
   test('its outline is its headings outside code, and an index\'s linked entries', async () => {
@@ -114,4 +114,20 @@ test('a fence closes only on the same character, at least as long, with nothing 
 
 test('a hard break keeps the line apart from the next', async () => {
   expect(reflow(['first line  ', 'second line\\', 'third', 'fourth'].join('\n'))).toBe(['first line  ', 'second line\\', 'third fourth'].join('\n'))
+})
+
+test('a rule is for matching files only when its frontmatter names paths, not when its body does', async () => {
+  expect(isPathRule('---\npaths:\n  - "src/**"\n---\n# API rules')).toBe(true)
+  expect(isPathRule('---\ndescription: x\npaths: ["*.ts"]\n---\nbody')).toBe(true)
+  // A horizontal rule and a YAML example in the body are no frontmatter.
+  expect(isPathRule('# Rules\n\n---\n\n```yaml\npaths:\n  - x\n```')).toBe(false)
+  expect(isPathRule('---\ndescription: x\n---\npaths: in the body')).toBe(false)
+})
+
+test('a reader page counts a wide character as two cells, so a Korean page keeps to its rows', async () => {
+  // Paragraphs of 40 Korean characters, 80 cells: one row each at 80 columns, a blank row between.
+  const text = Array.from({ length: 40 }, (_, line) => `${String(line).padStart(2, '0')}${'가'.repeat(38)}`).join('\n\n')
+  const pages = markdownPages(text, { rows: 26, columns: 80 })
+  const rows = (page: string) => page.split('\n').length
+  for (const page of pages) expect(rows(page.text)).toBeLessThanOrEqual(Math.floor(26 * 0.85))
 })

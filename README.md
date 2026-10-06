@@ -110,15 +110,18 @@ The mods leave some data behind, which you can delete by hand:
 | Saved logins | macOS: keychain items of the service `account-switch`. Elsewhere: `~/.claude/account-switch/` |
 | Webhook token | macOS: the keychain item of the service `sc-webhook`. Elsewhere: `~/.claude/sc-accounts/webhook-token` |
 | Webhook template | `~/.claude/sc-accounts/` |
-| Settings, account index, notes, checkpoint lists | `~/.claude/plugins/store/sc-*.json` |
+| Settings, account index | `~/.claude/plugins/store/sc-*.json` |
 | Tools, their logs and remembered values | in each project: `.toolbox/` |
-| Checkpoints | in each repository: the refs under `refs/sc/` and the files `.git/sc-snapshot-*.index` |
+| Notes and checkpoint lists | in each repository's git folder: `.git/sc-workspace/`, a pair of files per worktree |
+| Checkpoints | in each repository: the refs under `refs/sc/`, and the files `sc-snapshot-*.index` in the git folder and in each worktree's folder under `.git/worktrees/` |
 
-`~/.claude` is `CLAUDE_CONFIG_DIR` when that is set. To delete a repository's checkpoints:
+`~/.claude` is `CLAUDE_CONFIG_DIR` when that is set. To delete a repository's checkpoints, and its notes with them, run in the repository:
 
 ```bash
 git for-each-ref --format='%(refname)' refs/sc/ | xargs -n 1 git update-ref -d
-rm -f "$(git rev-parse --git-dir)"/sc-snapshot-*.index
+common="$(git rev-parse --git-common-dir)"
+rm -f "$common"/sc-snapshot-*.index "$common"/worktrees/*/sc-snapshot-*.index
+rm -rf "$common/sc-workspace"
 ```
 
 The account you are logged in with stays logged in; only the saved copies go.

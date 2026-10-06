@@ -4,8 +4,12 @@ export type Tab = 'agents' | 'checkpoints' | 'notes' | 'diff' | 'memory'
 /** A subagent or teammate as the Agents tab lists it. */
 export type AgentRow = {
   id: string
-  /** What TaskStop takes for it: its name, its teammate address, or its id. */
-  stopId: string
+  /**
+   * What TaskStop is asked to stop it by, the surest first: its id, which no
+   * other agent holds, then its name and its teammate address, which TaskStop
+   * also takes and two agents may share.
+   */
+  stopIds: string[]
   label: string
   type: string
   status: 'pending' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'killed'
