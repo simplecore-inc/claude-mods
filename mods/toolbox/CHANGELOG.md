@@ -4,6 +4,13 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.5.3 (2026-10-06)
+
+### Accounts (`sc-accounts`)
+
+- Every change of the login is recorded in `~/.claude/sc-accounts/login-changes.jsonl`: each switch with its time, session folder, version and whether the dialog or the command asked for it, and each change no switch of sc-accounts made.
+- A login that changed with no switch of sc-accounts, in any session, is said in a toast once.
+
 ## 0.5.2 (2026-10-06)
 
 ### All plugins

@@ -30,6 +30,8 @@ Keeps several Claude logins on this machine and switches every running session t
 2. Log in to another account with `/login`. Within a minute the mod saves it as well.
 3. Press **Switch** on its card and confirm in the dialog, or run `/sc:accounts use`. Every running Claude Code session on the machine uses it from its next request; nothing is restarted and no login is repeated. The dialog, like the one that removes an account, holds the keyboard on **Cancel** first, so an Enter meant for the prompt never switches the login.
 
+   Every change of the login is recorded, one JSON line each, in `~/.claude/sc-accounts/login-changes.jsonl`: each switch with the time, the session's folder, the version and whether the dialog or the command asked for it, and each change no switch of sc-accounts made. A change of the second kind is also said in a toast, so a login that changed by itself is noticed at once.
+
 Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes its saved credential: the keychain item on macOS, the vault file elsewhere. Using it again takes a new `/login`. Esc or Cancel closes the dialog.
 
 ## The accounts pane

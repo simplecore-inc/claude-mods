@@ -54,6 +54,8 @@ import {
 } from './keychain'
 import type { Credential } from './keychain'
 import { serialQueue } from './queue'
+import { isOwnSwitch, parseChanges, withChange } from './switchlog'
+import type { LoginChange } from './switchlog'
 import { deleteFileArgv, detectPlatform, privateWriteArgv, vaultFilePath } from './platform'
 import type { Platform } from './platform'
 
@@ -487,7 +489,11 @@ async function syncLiveOnce($: EngineInterface): Promise<string | null> {
         : (((await $.store.get(oauthAccountKey(owner.accountUuid))) as OauthAccount | undefined) ?? owner)
     await writeVault($, account.accountUuid, credential)
   }
-  if ((await read($, live)) !== account.accountUuid) liveChangedAt = await $.clock.now()
+  const previous = await read($, live)
+  if (previous !== account.accountUuid) {
+    liveChangedAt = await $.clock.now()
+    if (previous !== null) await noteChange($, previous, account)
+  }
   await update($, live, () => account.accountUuid)
   await $.store.set(oauthAccountKey(account.accountUuid), account)
 
@@ -759,10 +765,55 @@ async function ensureFresh($: EngineInterface, uuid: string, credential: Credent
   return fresh
 }
 
+/** The file that records every change of the live login, this mod's switches and the ones from outside it. */
+async function changesPath($: EngineInterface): Promise<string> {
+  return `${await claudeDirectory($)}/sc-accounts/login-changes.jsonl`
+}
+
+async function readChanges($: EngineInterface): Promise<string> {
+  const path = await changesPath($)
+
+  return (await $.fs.exists(path)) ? $.fs.read(path) : ''
+}
+
+/** Adds a change to the record; a record that cannot be written never stops a switch. */
+async function recordChange($: EngineInterface, change: Omit<LoginChange, 'at' | 'session' | 'cwd' | 'version'>): Promise<void> {
+  try {
+    const full: LoginChange = { at: await $.clock.now(), session: sessionId, cwd: await $.session.cwd(), version: release.version ?? '', ...change }
+    await $.fs.write(await changesPath($), withChange(await readChanges($), full))
+  } catch (error) {
+    debugLog($, error)
+  }
+}
+
+/** The changes of the live login this session has already said came from outside, so it says each once. */
+const toldOutside = new Set<string>()
+
+/**
+ * A change of the live login this session found: recorded and said aloud when
+ * no switch of this mod's, in any session, made it just before.
+ */
+async function noteChange($: EngineInterface, previousUuid: string, account: OauthAccount): Promise<void> {
+  const now = await $.clock.now()
+  if (isOwnSwitch(parseChanges(await readChanges($)), account.emailAddress, now)) return
+  const from = (await read($, accounts)).find(one => one.uuid === previousUuid)?.email ?? null
+  const key = `${from}>${account.emailAddress}@${Math.floor(now / OUTSIDE_SAY_MS)}`
+  if (toldOutside.has(key)) return
+  toldOutside.add(key)
+  await recordChange($, { kind: 'outside', from, to: account.emailAddress })
+  $.ui.toast(m.loginChangedOutside(from ?? '?', account.emailAddress))
+}
+
+/** How long one change from outside is said once, however many reads find it. */
+const OUTSIDE_SAY_MS = 10 * 60 * 1000
+
 /** Makes a saved account the one Claude Code logs in with. */
-async function switchTo($: EngineInterface, uuid: string): Promise<string> {
+async function switchTo($: EngineInterface, uuid: string, via: 'dialog' | 'command'): Promise<string> {
   const target = (await read($, accounts)).find(one => one.uuid === uuid)
   if (!target) throw new Error('no saved account with that id')
+  const fromUuid = await read($, live)
+  // Recorded first, so every session that finds the login changed knows this switch made it.
+  await recordChange($, { kind: 'switch', via, from: (await read($, accounts)).find(one => one.uuid === fromUuid)?.email ?? null, to: target.email })
   await exclusive(() => installLogin($, uuid, target.email))
   await refreshLive($)
 
@@ -1589,7 +1640,7 @@ export const register: Register = (on, options) => {
         const target = pick(await read($, accounts), query)
         if (!target) return { text: `${m.noMatch(query)}\n${await listText($)}` }
 
-        return { text: verb === 'use' ? await switchTo($, target.uuid) : await remove($, target.uuid) }
+        return { text: verb === 'use' ? await switchTo($, target.uuid, 'command') : await remove($, target.uuid) }
       }
 
       return { text: m.unknownVerb(verb) }
@@ -1848,7 +1899,7 @@ export const register: Register = (on, options) => {
           onPress: act(async () => {
             await dismiss()
 
-            return switchTo($, switching.uuid)
+            return switchTo($, switching.uuid, 'dialog')
           }),
         },
         { label: m.cancel, onPress: act(dismiss) },
