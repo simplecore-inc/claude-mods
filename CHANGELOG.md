@@ -2,7 +2,21 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.5.4 (2026-10-06)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window, and restart a window that has been open since before the last account switch (`/exit`, then `claude --resume`): such a window can keep the previous login in memory and write it back when it refreshes or exits, which signs every window out with "Login expired".
+
+### Accounts (`sc-accounts`)
+
+- When the login Claude Code holds is rejected (the profile endpoint answers 401 or 403, or the token is empty) and the account `~/.claude.json` names has a saved login that works without a refresh, that saved login is put back, recorded as `heal` and said in a toast. A saved login that needs refreshing first is left to `/login`.
+- On macOS, `~/.claude/.credentials.json` is brought up to the keychain's login whenever Claude Code refreshed into the keychain alone, so the other sessions drop the token that refresh spent instead of failing with it.
+- The switch dialog says that windows opened before the switch should be restarted.
+
 ## 0.5.3 (2026-10-06)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window. A window keeps the plugins it loaded until then, so an earlier version keeps running there: one with a one-press **Switch** that an `Enter` can trigger, and one that records no login change.
 
 ### Accounts (`sc-accounts`)
 
@@ -10,6 +24,9 @@ Every plugin in this repository shares one version, kept in `VERSION`. `scripts/
 - A login that changed with no switch of sc-accounts, in any session, is said in a toast once.
 
 ## 0.5.2 (2026-10-06)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window. A window keeps the plugins it loaded until then, so an earlier version keeps running there, with a one-press **Switch** that an `Enter` can trigger.
 
 ### All plugins
 

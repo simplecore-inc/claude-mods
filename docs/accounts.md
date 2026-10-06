@@ -32,6 +32,8 @@ Keeps several Claude logins on this machine and switches every running session t
 
    Every change of the login is recorded, one JSON line each, in `~/.claude/sc-accounts/login-changes.jsonl`: each switch with the time, the session's folder, the version and whether the dialog or the command asked for it, and each change no switch of sc-accounts made. A change of the second kind is also said in a toast, so a login that changed by itself is noticed at once.
 
+   A Claude Code window opened before a switch can keep the previous login in memory and write it back later, when it refreshes its token or exits; its token is often spent by then, and every window then reports "Login expired". After switching, restart the other open windows (`/exit`, then `claude --resume`); the switch dialog says so. When the login Claude Code holds is rejected outright (the profile endpoint answers 401 or 403, or the token is empty) and the account `~/.claude.json` names has a saved login that works without a refresh, sc-accounts puts that saved login back, records it as `heal` and says so in a toast. A saved login that needs refreshing first is left to `/login`, as several sessions refreshing it at once would spend it too.
+
 Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes its saved credential: the keychain item on macOS, the vault file elsewhere. Using it again takes a new `/login`. Esc or Cancel closes the dialog.
 
 ## The accounts pane

@@ -223,3 +223,15 @@ export function describeFailure(error: unknown, m: Messages): string {
 
   return error instanceof Error ? error.message : String(error)
 }
+
+/**
+ * Whether the configured account's saved login may be put back in place of a
+ * rejected one: there is one, it is not the token rejected, it works without a
+ * refresh (several sessions refreshing it at once would spend it), and this
+ * session did not put one back within `gapMs`.
+ */
+export function mayHeal(saved: Credential | null, rejected: Credential, now: number, healedAt: number, gapMs: number): saved is Credential {
+  if (saved === null || now - healedAt < gapMs) return false
+
+  return saved.claudeAiOauth.accessToken !== rejected.claudeAiOauth.accessToken && !needsRefresh(saved, now)
+}

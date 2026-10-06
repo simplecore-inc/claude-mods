@@ -21,3 +21,7 @@ test('the record keeps one change a line, the newest kept, and skips a line that
   expect(changes.length).toBe(CHANGES_KEPT)
   expect(changes[changes.length - 1]?.to).toBe(`u${CHANGES_KEPT + 4}@x`)
 })
+
+test('a heal of this mod\'s counts as its own change, so no session calls it a change from outside', async () => {
+  expect(isOwnSwitch([change('heal', 'simple@x', 2_000_000)], 'simple@x', 2_000_000 + 10_000)).toBe(true)
+})

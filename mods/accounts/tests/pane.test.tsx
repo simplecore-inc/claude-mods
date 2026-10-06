@@ -633,6 +633,8 @@ test('the switch dialog names the account and focuses Cancel first', async ($, o
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Text', text: 'Switch to jun@example.org?' })).toBeDefined()
   expect((await ui.find({ key: 'dialog-cancel' }))?.props.autoFocus).toBe(true)
+  // It says that windows opened before the switch should be restarted.
+  expect(await ui.find({ type: 'Text', text: /^A Claude Code window opened before the switch/ })).toBeDefined()
   expect((await ui.find({ key: 'dialog-confirm' }))?.props.autoFocus).toBeUndefined()
   await ui.unmount()
 })

@@ -11,6 +11,7 @@ import {
   failedReading,
   lookedUpOnly,
   withMeasured,
+  mayHeal,
   needsRefresh,
   parseProfile,
   parseSpend,
@@ -50,6 +51,7 @@ import {
   deleteArgv,
   findArgv,
   parseAccountName,
+  fileLagsKeychain,
   parseCredential,
 } from './keychain'
 import type { Credential } from './keychain'
@@ -313,6 +315,18 @@ async function writeLiveCredentialFile($: EngineInterface, credential: Credentia
   await writePrivateFile($, path, JSON.stringify(credential))
 }
 
+/**
+ * On macOS, brings `.credentials.json` up to the keychain's login when Claude
+ * Code refreshed into the keychain alone: the file's change is what makes the
+ * other sessions drop the token whose refresh token that refresh spent.
+ */
+async function keepCredentialFileInStep($: EngineInterface, keychain: Credential): Promise<void> {
+  if ((await platformOf($)).backend !== 'keychain') return
+  const text = await readFileIfPresent($, await liveCredentialPath($))
+  const file = text === null ? null : parseCredential(text)
+  if (fileLagsKeychain(file, keychain)) await writeLiveCredentialFile($, keychain)
+}
+
 async function deleteVault($: EngineInterface, uuid: string): Promise<void> {
   const platform = await platformOf($)
   if (platform.backend === 'file') {
@@ -474,6 +488,7 @@ async function syncLiveOnce($: EngineInterface): Promise<string | null> {
 
     return null
   }
+  await keepCredentialFileInStep($, credential)
 
   let account = configured
   const stored = await readVault($, configured.accountUuid)
@@ -481,8 +496,11 @@ async function syncLiveOnce($: EngineInterface): Promise<string | null> {
     // The token changed: ask whose it is. During a login the config and the
     // keychain can name different accounts for a moment, and filing a token
     // under the wrong account would show one account's usage as another's.
-    const owner = await tokenOwner($, credential)
-    if (owner === null) return read($, live)
+    const check = await tokenCheck($, credential)
+    // Rejected: a Claude Code process wrote back a login it held from before, already spent.
+    if (check === 'rejected') return healLogin($, configured, credential)
+    if (check === 'unknown') return read($, live)
+    const owner = check
     account =
       owner.accountUuid === configured.accountUuid
         ? configured
@@ -733,16 +751,59 @@ async function readRelease($: EngineInterface): Promise<{ version?: string; date
 
 /** Whose the token is, or null when the profile endpoint cannot say now. */
 async function tokenOwner($: EngineInterface, credential: Credential): Promise<OauthAccount | null> {
+  const check = await tokenCheck($, credential)
+
+  return typeof check === 'string' ? null : check
+}
+
+/**
+ * Whose login a token is, as the profile endpoint answers: the account;
+ * `rejected` when the token is empty or the endpoint refuses it (401, 403),
+ * so it can never work again; `unknown` when no answer came (offline, 5xx).
+ */
+async function tokenCheck($: EngineInterface, credential: Credential): Promise<OauthAccount | 'rejected' | 'unknown'> {
+  if (credential.claudeAiOauth.accessToken === '') return 'rejected'
   try {
     const response = await $.http.fetch(PROFILE_URL, usageInit({ token: credential.claudeAiOauth.accessToken }))
-    if (!response.ok) return null
+    if (response.status === 401 || response.status === 403) return 'rejected'
+    if (!response.ok) return 'unknown'
 
-    return parseProfile(response.text)
+    return parseProfile(response.text) ?? 'unknown'
   } catch (error) {
     $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' })
 
-    return null
+    return 'unknown'
   }
+}
+
+/** How long after putting a login back this session leaves a login rejected again alone, so two writers never loop. */
+const HEAL_GAP_MS = 60 * 1000
+let healedAt = 0
+
+/**
+ * Puts the configured account's saved login back when the one Claude Code
+ * holds was rejected: a Claude Code process that held a login from before a
+ * switch writes it back on its refresh or its exit, and that token is spent.
+ * Only a saved login that works as it is: one that needs refreshing is left
+ * to /login, as several sessions refreshing it at once would spend it too.
+ *
+ * @returns the live account's uuid, or the one shown when nothing was put back
+ */
+async function healLogin($: EngineInterface, configured: OauthAccount, rejected: Credential): Promise<string | null> {
+  const now = await $.clock.now()
+  const saved = await readVault($, configured.accountUuid)
+  if (!mayHeal(saved, rejected, now, healedAt, HEAL_GAP_MS)) return read($, live)
+  const check = await tokenCheck($, saved)
+  if (typeof check === 'string' || check.accountUuid !== configured.accountUuid) return read($, live)
+  healedAt = now
+  await recordChange($, { kind: 'heal', from: null, to: configured.emailAddress })
+  await writeLiveCredential($, saved)
+  await writeLiveCredentialFile($, saved)
+  liveChangedAt = now
+  await update($, live, () => configured.accountUuid)
+  $.ui.toast(m.loginHealed(configured.emailAddress))
+
+  return configured.accountUuid
 }
 
 /**
@@ -1893,7 +1954,7 @@ export const register: Register = (on, options) => {
         bodyColumns,
         header,
         m.switchTitle(switching.email),
-        [{ text: m.switchHint, tone: 'muted' }],
+        [{ text: m.switchHint, tone: 'muted' }, { text: m.switchRestartHint, tone: 'muted' }],
         {
           label: m.switchButton,
           onPress: act(async () => {

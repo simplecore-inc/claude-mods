@@ -9,8 +9,11 @@
 export type LoginChange = {
   /** Milliseconds since the epoch. */
   at: number
-  /** `switch`: this mod switched; `outside`: the login changed with no switch of this mod's just before. */
-  kind: 'switch' | 'outside'
+  /**
+   * `switch`: this mod switched; `heal`: this mod put the configured account's saved login back after
+   * Claude Code's was rejected; `outside`: the login changed with no switch or heal of this mod's just before.
+   */
+  kind: 'switch' | 'heal' | 'outside'
   /** The session that made or noticed the change, its folder and the mod's version there. */
   session: string
   cwd: string
@@ -48,7 +51,7 @@ export function withChange(text: string, change: LoginChange): string {
   return `${lines.slice(-CHANGES_KEPT).join('\n')}\n`
 }
 
-/** Whether a switch of this mod's, in any session, made the login `to` shortly before `at`. */
+/** Whether a switch or a heal of this mod's, in any session, made the login `to` shortly before `at`. */
 export function isOwnSwitch(changes: readonly LoginChange[], to: string, at: number): boolean {
-  return changes.some(change => change.kind === 'switch' && change.to === to && at - change.at >= -5_000 && at - change.at <= OWN_SWITCH_MS)
+  return changes.some(change => (change.kind === 'switch' || change.kind === 'heal') && change.to === to && at - change.at >= -5_000 && at - change.at <= OWN_SWITCH_MS)
 }

@@ -60,3 +60,16 @@ export function addLine(service: string, account: string, text: string): string 
 export function deleteArgv(service: string, account: string): string[] {
   return ['security', 'delete-generic-password', '-s', service, '-a', account]
 }
+
+/**
+ * Whether `.credentials.json` holds an older login than the keychain: another
+ * token there, expiring no later. Claude Code refreshes into the keychain
+ * alone, while a session with that file drops its cached login only when the
+ * file changes, so a file left behind keeps every other session on a token
+ * whose refresh token is already spent, and it expires with "Login expired".
+ */
+export function fileLagsKeychain(file: Credential | null, keychain: Credential): boolean {
+  if (file === null) return false
+
+  return file.claudeAiOauth.accessToken !== keychain.claudeAiOauth.accessToken && file.claudeAiOauth.expiresAt <= keychain.claudeAiOauth.expiresAt
+}
