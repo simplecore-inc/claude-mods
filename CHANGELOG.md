@@ -2,6 +2,27 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.6.0 (2026-10-06)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window. Two things change for what you may have written against them: `/sc:accounts remove` takes an account's whole email or its id, never a number or a prefix; and the default webhook template sends `resets_at` in Unix seconds, as Claude Code's status line input does. A template file still holding the earlier default is brought to the new one; a template you edited is left as it is.
+
+### Accounts (`sc-accounts`)
+
+- With [Orca](https://www.onorca.dev) writing the Claude login, a switch selects the account in Orca too, so Orca keeps it instead of putting its own back. A switch to an account Orca holds no login for is refused with how to add it there; with Orca closed, the account is selected in Orca once it answers again. A login changed outside both to an account Orca keeps is selected in Orca as well. The record names changes Orca made `orca` and selections sc-accounts asked for `follow`. On Windows, Orca is reached on its named pipe through PowerShell.
+- An inactive account Orca keeps a login for is never refreshed here, and its card says why its figures age.
+- Writes to Claude Code's login and `~/.claude.json` take Claude Code's own locks and replace each file whole; `~/.claude.json` is read again under its lock. A switch whose write fails puts the previous login back and is recorded as `failed`.
+- The login Claude Code holds is never refreshed here, even while the config names another account, and an older copy of an account's login is never filed over a newer one saved. A saved account is refreshed under that account's lock across sessions, after reading its saved login again, and an answer that comes after its 30 seconds is still saved.
+- The switch dialog no longer asks to restart the other windows: Claude Code reads the stored login again before it refreshes a token.
+- A change of the login is explained once the login has stood still for ten seconds, so a write that passes through another login on its way back says nothing.
+- The usage and profile lookups give up after 15 seconds. A timeout and a server's error status are said in the pane's language.
+- `/sc:accounts remove` takes the whole email, in any case, or the account id.
+- **Clean up** deletes only the sessions its dialog named that are still idle, and never a session a running Claude Code process resumed.
+- Usage is counted by one session at a time across the machine, the lines changed are kept per session, and a lookup never writes back the figures of an account another session removed.
+- A hook of sc-accounts that fails leaves the tool call, the focus or the close to Claude Code instead of stopping it.
+- Webhook: each time is offered as ISO 8601 text in UTC, Unix seconds, Unix milliseconds, and local time with its offset from UTC (`timeEpoch`, `fiveHourResetsAtEpoch`, `weeklyResetsAtLocal` and the rest), and the dialog lists the times by format, each with the time now as its example.
+- Webhook: under the last send the dialog shows the start of what the receiver answered, as a receiver can answer HTTP 200 and still store nothing. A receiver silent for 10 seconds is said not to have answered, and its send is let go after five minutes. Sends never write the template file.
+
 ## 0.5.4 (2026-10-06)
 
 > [!IMPORTANT]

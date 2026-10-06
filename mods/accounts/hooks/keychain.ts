@@ -1,5 +1,38 @@
-/** The keychain item Claude Code reads its login from. */
+/** The keychain item Claude Code reads its login from, with its default config directory. */
 export const LIVE_SERVICE = 'Claude Code-credentials'
+
+/** The environment variables that decide where Claude Code keeps its login. */
+export type StorageVariables = { configDir?: string; secureStorageDir?: string }
+
+/**
+ * The keychain service Claude Code keeps its login under, named as it names
+ * it: `Claude Code-credentials`, then `-` and the first eight hex digits of
+ * the SHA-256 of a folder when `CLAUDE_SECURESTORAGE_CONFIG_DIR` names one,
+ * or else when `CLAUDE_CONFIG_DIR` is set (that folder, as given, NFC). An
+ * empty `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the plain name.
+ */
+export async function liveServiceName(variables: StorageVariables, defaultConfigDir: string): Promise<string> {
+  const { secureStorageDir, configDir } = variables
+  const isPlain = secureStorageDir !== undefined ? secureStorageDir === '' : !configDir
+  if (isPlain) return LIVE_SERVICE
+  const folder = (secureStorageDir ?? configDir ?? defaultConfigDir).normalize('NFC')
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(folder))
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+
+  return `${LIVE_SERVICE}-${hex.slice(0, 8)}`
+}
+
+/** The folder Claude Code keeps `.credentials.json` in: `CLAUDE_SECURESTORAGE_CONFIG_DIR` when set (empty means the default), else its config directory. */
+export function credentialsDirectory(variables: StorageVariables, defaultConfigDir: string): string {
+  if (variables.secureStorageDir !== undefined) return (variables.secureStorageDir || defaultConfigDir).normalize('NFC')
+
+  return (variables.configDir || defaultConfigDir).normalize('NFC')
+}
+
+/** The keychain account Claude Code reads its login with: the user's name, or `claude-code-user` when that holds other characters. */
+export function keychainAccountName(user: string | undefined): string {
+  return user && /^[a-zA-Z0-9._-]+$/.test(user) ? user : 'claude-code-user'
+}
 /** The keychain service this mod keeps one item per saved account under. */
 export const VAULT_SERVICE = 'account-switch'
 /** `security`'s exit code for an item that is not there. */
@@ -21,6 +54,15 @@ export type Credential = {
 
 export class KeychainError extends Error {}
 
+/**
+ * Whether an account id is one this mod files a login under: letters, digits,
+ * `-` and `_`, as a UUID is. It names a keychain item and a vault file, and
+ * travels inside a `security -i` line, so nothing else may reach those.
+ */
+export function isAccountId(id: unknown): id is string {
+  return typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id)
+}
+
 function toHex(text: string): string {
   return Array.from(new TextEncoder().encode(text), byte => byte.toString(16).padStart(2, '0')).join('')
 }
@@ -40,25 +82,37 @@ export function findArgv(service: string, account?: string): string[] {
   return ['security', 'find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
 }
 
-/** argv printing one item's attributes, its `acct` among them, without the secret. */
-export function attributesArgv(service: string): string[] {
-  return ['security', 'find-generic-password', '-s', service]
-}
-
-export function parseAccountName(attributes: string): string | undefined {
-  return /"acct"<blob>="([^"]*)"/.exec(attributes)?.[1]
-}
-
 /**
  * The `security -i` line that creates or replaces an item. The secret travels
  * on stdin as hex, never in argv, the way Claude Code writes its own item.
  */
 export function addLine(service: string, account: string, text: string): string {
+  // `security -i` reads the line as a command line of its own: a quote, a backslash or a line break would end it.
+  for (const value of [service, account]) {
+    if (/["\\\n\r]/.test(value)) throw new KeychainError(`refused a keychain name with a quote, backslash or line break: ${JSON.stringify(value)}`)
+  }
+
   return `add-generic-password -U -a "${account}" -s "${service}" -X "${toHex(text)}"\n`
 }
 
 export function deleteArgv(service: string, account: string): string[] {
   return ['security', 'delete-generic-password', '-s', service, '-a', account]
+}
+
+/**
+ * Whether a login is an older copy than the one saved for its account: another
+ * grant (refresh token) that expires sooner. Filing it would replace a newer
+ * grant with one whose refresh token may already be spent.
+ */
+export function isOlderGrant(candidate: Credential, saved: Credential | null): boolean {
+  if (saved === null) return false
+
+  return candidate.claudeAiOauth.refreshToken !== saved.claudeAiOauth.refreshToken && candidate.claudeAiOauth.expiresAt < saved.claudeAiOauth.expiresAt
+}
+
+/** Whether two logins are one grant: the same refresh token, whatever access token each holds now. */
+export function isSameGrant(a: Credential | null, b: Credential | null): boolean {
+  return a !== null && b !== null && a.claudeAiOauth.refreshToken === b.claudeAiOauth.refreshToken
 }
 
 /**

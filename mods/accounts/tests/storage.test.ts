@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { removeTreeArgv } from '../hooks/shared/files'
-import { byteSize, cleanupPlan, cleanupTargets, sessionsOf, summarizeStorage } from '../hooks/storage'
+import { byteSize, cleanupPlan, cleanupTargets, confirmedSessions, sessionIdsInCommands, sessionsOf, summarizeStorage } from '../hooks/storage'
 
 const DAY = 86_400_000
 const NOW = Date.parse('2026-10-05T00:00:00Z')
@@ -64,4 +64,22 @@ test('a cleanup deletes only under the projects folder: any path reaching out st
   for (const bad of ['../x', '-w-app/../../x', '/etc/passwd', 'C:\\x', '-w-app//s1', '', './s1', '-w-app\\..\\x']) {
     expect(() => cleanupTargets('/c/projects', ['-w-app/s1.jsonl', bad])).toThrow(/refused to delete outside/)
   }
+})
+
+test('a session a running Claude Code process resumed is in use, whatever its age', async () => {
+  const commands = [
+    'claude --dangerously-skip-permissions --resume f88f7e0b-c681-47a4-82df-510f42d4f28e',
+    '/Users/me/.local/bin/claude --output-format stream-json --resume=4FDFDC68-93FD-4434-97C6-92305E3A0B5E --tools x',
+    'claude -r 1c74732e-7cde-4c14-bbb4-a0667c41b25d',
+    'vim notes-1c74732e-7cde-4c14-bbb4-a0667c41b25e.md',
+    'node other --resume 11111111-2222-3333-4444-555555555555',
+  ].join('\n')
+  expect(sessionIdsInCommands(commands).sort()).toEqual(['1c74732e-7cde-4c14-bbb4-a0667c41b25d', '4fdfdc68-93fd-4434-97c6-92305e3a0b5e', 'f88f7e0b-c681-47a4-82df-510f42d4f28e'])
+})
+
+test('a cleanup deletes only the sessions its dialog named, never one that went idle since', async () => {
+  const sessions = sessionsOf(FILES)
+  const named = new Set(sessions.filter(session => session.session === 's1').map(session => `${session.folder}/${session.session}`))
+  expect(confirmedSessions(sessions, named).map(session => session.session)).toEqual(['s1'])
+  expect(confirmedSessions(sessions, new Set())).toEqual([])
 })

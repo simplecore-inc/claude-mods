@@ -15,11 +15,9 @@ export type WebhookMethod = 'POST' | 'GET'
 /** What the feed is set to; nothing is sent while `enabled` is false or `url` is empty. The token is kept apart, as a secret. */
 export type WebhookConfig = { enabled: boolean; url: string; method: WebhookMethod }
 
-/** The variables a template may use, in the order the dialog lists them. */
-export const WEBHOOK_VARIABLES = [
+/** The variables that are not times, in the order the dialog lists them. */
+export const PLAIN_VARIABLES = [
   'session',
-  'time',
-  'timestamp',
   'hostname',
   'version',
   'cwd',
@@ -39,16 +37,46 @@ export const WEBHOOK_VARIABLES = [
   'prReview',
   'account',
   'fiveHour',
-  'fiveHourResetsAt',
   'weekly',
-  'weeklyResetsAt',
+] as const
+
+/**
+ * The formats a time is sent in: ISO 8601 text in UTC, Unix time in seconds
+ * (a number, as Claude Code's status line input gives its reset times), Unix
+ * time in milliseconds (a number), and the local time with its offset from UTC
+ * (RFC 3339 text).
+ */
+export const TIME_FORMATS = ['iso', 'epoch', 'epochMs', 'local'] as const
+
+export type TimeFormat = (typeof TIME_FORMATS)[number]
+
+/** The time variables by format: now, the five-hour window's reset and the weekly window's, in the order the dialog lists them. */
+export const TIME_VARIABLES = {
+  iso: ['time', 'fiveHourResetsAt', 'weeklyResetsAt'],
+  epoch: ['timeEpoch', 'fiveHourResetsAtEpoch', 'weeklyResetsAtEpoch'],
+  epochMs: ['timeEpochMs', 'fiveHourResetsAtEpochMs', 'weeklyResetsAtEpochMs'],
+  local: ['timeLocal', 'fiveHourResetsAtLocal', 'weeklyResetsAtLocal'],
+} as const
+
+/** Every variable a template may use; `timestamp`, the older name of `timeEpochMs`, still fills. */
+export const WEBHOOK_VARIABLES = [
+  ...PLAIN_VARIABLES,
+  ...TIME_VARIABLES.iso,
+  ...TIME_VARIABLES.epoch,
+  ...TIME_VARIABLES.epochMs,
+  ...TIME_VARIABLES.local,
+  'timestamp',
 ] as const
 
 export type WebhookVariable = (typeof WEBHOOK_VARIABLES)[number]
 
 export type WebhookValues = Record<WebhookVariable, string | number | boolean | null>
 
-/** A template shaped like Claude Code's status line input, which a receiver written for that input already reads. */
+/**
+ * A template shaped like Claude Code's status line input, its reset times in
+ * Unix seconds as that input gives them, so a receiver written for that input
+ * already reads it.
+ */
 export const DEFAULT_TEMPLATE = {
   session_id: '{{session}}',
   cwd: '{{cwd}}',
@@ -60,8 +88,8 @@ export const DEFAULT_TEMPLATE = {
   context_window: { used_percentage: '{{context}}' },
   cost: { total_cost_usd: '{{cost}}', total_lines_added: '{{linesAdded}}', total_lines_removed: '{{linesRemoved}}' },
   rate_limits: {
-    five_hour: { used_percentage: '{{fiveHour}}', resets_at: '{{fiveHourResetsAt}}' },
-    seven_day: { used_percentage: '{{weekly}}', resets_at: '{{weeklyResetsAt}}' },
+    five_hour: { used_percentage: '{{fiveHour}}', resets_at: '{{fiveHourResetsAtEpoch}}' },
+    seven_day: { used_percentage: '{{weekly}}', resets_at: '{{weeklyResetsAtEpoch}}' },
   },
   account: '{{account}}',
   hostname: '{{hostname}}',
@@ -69,6 +97,35 @@ export const DEFAULT_TEMPLATE = {
 
 /** The default template as the file holds it. */
 export const DEFAULT_TEMPLATE_TEXT = `${JSON.stringify(DEFAULT_TEMPLATE, null, 2)}\n`
+
+/**
+ * The default earlier releases wrote (0.3.0 to 0.5.4), its reset times as ISO
+ * text where the status line input gives Unix seconds. A template file still
+ * holding it byte for byte was never edited, and is brought to the current
+ * default.
+ */
+const FORMER_DEFAULTS = [
+  {
+    session_id: '{{session}}',
+    cwd: '{{cwd}}',
+    workspace: { current_dir: '{{cwd}}' },
+    model: { id: '{{modelId}}', display_name: '{{model}}' },
+    version: '{{version}}',
+    effort: { level: '{{effort}}' },
+    fast_mode: '{{fast}}',
+    context_window: { used_percentage: '{{context}}' },
+    cost: { total_cost_usd: '{{cost}}', total_lines_added: '{{linesAdded}}', total_lines_removed: '{{linesRemoved}}' },
+    rate_limits: {
+      five_hour: { used_percentage: '{{fiveHour}}', resets_at: '{{fiveHourResetsAt}}' },
+      seven_day: { used_percentage: '{{weekly}}', resets_at: '{{weeklyResetsAt}}' },
+    },
+    account: '{{account}}',
+    hostname: '{{hostname}}',
+  },
+]
+
+/** The former defaults as the file held them. */
+export const FORMER_DEFAULT_TEXTS: readonly string[] = FORMER_DEFAULTS.map(template => `${JSON.stringify(template, null, 2)}\n`)
 
 /** The shortest gap between two sends, and the longest the feed stays quiet while nothing changes. */
 export const WEBHOOK_MIN_GAP_MS = 2000
@@ -155,15 +212,43 @@ export type FeedInput = {
   limits: readonly LimitView[]
 }
 
+/** One moment in every format. */
+export type TimeValues = { iso: string; epoch: number; epochMs: number; local: string }
+
+/**
+ * The local wall-clock time at `at` with its offset from UTC, as RFC 3339
+ * writes it: `2026-10-06T18:20:00+09:00`. `offsetMinutes` is what
+ * `Date#getTimezoneOffset` answers for that instant (UTC minus local).
+ */
+export function localTime(at: number, offsetMinutes = new Date(at).getTimezoneOffset()): string {
+  const east = -offsetMinutes
+  const wall = new Date(at + east * 60_000).toISOString().slice(0, 19)
+  const size = Math.abs(east)
+
+  return `${wall}${east < 0 ? '-' : '+'}${String(Math.floor(size / 60)).padStart(2, '0')}:${String(size % 60).padStart(2, '0')}`
+}
+
+/** The moment `at` (milliseconds since 1970 UTC) in every format a template can send it in. */
+export function timeValues(at: number, offsetMinutes?: number): TimeValues {
+  return { iso: new Date(at).toISOString(), epoch: Math.floor(at / 1000), epochMs: at, local: localTime(at, offsetMinutes) }
+}
+
 /** The template variables' values for one moment of the session. */
 export function webhookValues(input: FeedInput): WebhookValues {
   const { status } = input
   const window = (label: string) => input.limits.find(limit => limit.label === label)
+  // A reset time that does not parse is no time: null in every format.
+  const resetOf = (label: string) => {
+    const at = Date.parse(window(label)?.resetsAt ?? '')
+
+    return Number.isNaN(at) ? null : timeValues(at)
+  }
+  const now = timeValues(input.now)
+  const fiveHour = resetOf('5h')
+  const weekly = resetOf('wk')
 
   return {
     session: input.session,
-    time: new Date(input.now).toISOString(),
-    timestamp: input.now,
     hostname: input.hostname,
     version: input.version,
     cwd: input.cwd,
@@ -183,15 +268,26 @@ export function webhookValues(input: FeedInput): WebhookValues {
     prReview: status.pr?.reviewState ?? null,
     account: input.account,
     fiveHour: window('5h')?.percent ?? null,
-    fiveHourResetsAt: window('5h')?.resetsAt ?? null,
     weekly: window('wk')?.percent ?? null,
-    weeklyResetsAt: window('wk')?.resetsAt ?? null,
+    time: now.iso,
+    timeEpoch: now.epoch,
+    timeEpochMs: now.epochMs,
+    timeLocal: now.local,
+    timestamp: now.epochMs,
+    fiveHourResetsAt: fiveHour?.iso ?? null,
+    fiveHourResetsAtEpoch: fiveHour?.epoch ?? null,
+    fiveHourResetsAtEpochMs: fiveHour?.epochMs ?? null,
+    fiveHourResetsAtLocal: fiveHour?.local ?? null,
+    weeklyResetsAt: weekly?.iso ?? null,
+    weeklyResetsAtEpoch: weekly?.epoch ?? null,
+    weeklyResetsAtEpochMs: weekly?.epochMs ?? null,
+    weeklyResetsAtLocal: weekly?.local ?? null,
   }
 }
 
-/** The values that say something changed: all but the clock's. */
+/** The values that say something changed: all but the ones telling the time now. */
 export function changeKey(values: WebhookValues): string {
-  const { time: _time, timestamp: _timestamp, ...rest } = values
+  const { time: _time, timeEpoch: _timeEpoch, timeEpochMs: _timeEpochMs, timeLocal: _timeLocal, timestamp: _timestamp, ...rest } = values
 
   return JSON.stringify(rest)
 }

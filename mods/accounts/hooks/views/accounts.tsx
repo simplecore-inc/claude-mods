@@ -140,6 +140,8 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               ))}
               {!reading && <Text dimColor>{m.loading}</Text>}
               {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger')}
+              {/* Orca keeps this login and its token is not refreshed here: the figures age until the account is in use. */}
+              {reading?.isHeld && Toned(ui, `held-${one.uuid}`, m.heldByOrca, undefined, { isDim: true })}
               {/* Only what the usage endpoint reported for this account, as it reported it. */}
               {reading?.spend &&
                 Toned(

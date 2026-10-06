@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { padCells, truncate } from '../hooks/shared/layout'
-import { AnthropicError, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
+import { AnthropicError, describeFailure, failedReading, lookedUpOnly, parseProfile, parseUsage, withMeasured } from '../hooks/anthropic'
 import { messagesFor } from '../hooks/i18n'
+import { TimeoutError } from '../hooks/io'
 import { updatedText } from '../hooks/views/accounts'
-import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, resetClock, resetText, untilReset } from '../hooks/format'
+import { bar, barParts, displayWidth, releaseDateOf, isSameReset, packRows, pick, pickExact, resetClock, resetText, untilReset } from '../hooks/format'
 
 const NOW = Date.parse('2026-10-04T05:00:00Z')
 
@@ -187,4 +188,26 @@ test('truncate and padCells count wide characters as two cells', async () => {
   expect(truncate('가나다라', 5)).toBe('가나…')
   expect(padCells('가', 4)).toBe('가  ')
   expect(padCells('ab', 4, 'start')).toBe('  ab')
+})
+
+test('removing takes an account named whole, never a position or a prefix a typo can match', async () => {
+  const list = [
+    { uuid: 'u1', email: 'mina@example.com', savedAt: 0 },
+    { uuid: 'u2', email: 'jun@example.org', savedAt: 0 },
+  ]
+  expect(pickExact(list, 'JUN@example.org')?.uuid).toBe('u2')
+  expect(pickExact(list, 'u1')?.email).toBe('mina@example.com')
+  expect(pickExact(list, '2')).toBeUndefined()
+  expect(pickExact(list, 'jun')).toBeUndefined()
+  expect(pickExact(list, '')).toBeUndefined()
+  // Switching, which a switch back undoes, still takes the position and a prefix.
+  expect(pick(list, '2')?.uuid).toBe('u2')
+  expect(pick(list, 'jun')?.uuid).toBe('u2')
+})
+
+test('a failed lookup is said in the person\'s language: an expired login, a server\'s error status, a server that did not answer', async () => {
+  const ko = messagesFor('ko')
+  expect(describeFailure(new AnthropicError('usage endpoint answered 401', 401), ko)).toBe(ko.authExpired)
+  expect(describeFailure(new AnthropicError('usage endpoint answered 503', 503), ko)).toBe('서버가 오류를 반환했습니다(HTTP 503).')
+  expect(describeFailure(new TimeoutError(ko.usageNoAnswer(15)), ko)).toBe('사용량 조회 서버가 15초 안에 응답하지 않았습니다.')
 })

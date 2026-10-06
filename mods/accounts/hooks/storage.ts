@@ -100,6 +100,31 @@ export function cleanupPlan(sessions: StorageSession[], days: number, now: numbe
   return { sessions: chosen, bytes: chosen.reduce((sum, session) => sum + session.bytes, 0) }
 }
 
+/**
+ * The sessions running Claude Code processes name in their command lines, one
+ * process a line: the id after `--resume`, `-r` or `--session-id`. A session
+ * resumed in another window but idle past a cleanup's age is still in use.
+ */
+export function sessionIdsInCommands(commandLines: string): string[] {
+  const ids = new Set<string>()
+  const id = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+  for (const line of commandLines.split('\n')) {
+    if (!/claude/i.test(line)) continue
+    for (const match of line.matchAll(new RegExp(`(?:--resume|--session-id|-r)(?:=|\\s+)${id}`, 'g'))) if (match[1]) ids.add(match[1].toLowerCase())
+  }
+
+  return [...ids]
+}
+
+/**
+ * The sessions a cleanup deletes now: those planned now that the dialog also
+ * showed when the person confirmed it. A session that went idle past the age
+ * between the two was never asked about, and stays.
+ */
+export function confirmedSessions(planned: StorageSession[], confirmed: ReadonlySet<string>): StorageSession[] {
+  return planned.filter(session => confirmed.has(`${session.folder}/${session.session}`))
+}
+
 /** A size in a few characters: `512 B`, `12.4 KB`, `221.6 MB`, `17.0 GB`. */
 export function byteSize(bytes: number): string {
   const units: [number, string][] = [

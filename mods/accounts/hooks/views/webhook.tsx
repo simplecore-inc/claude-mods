@@ -1,6 +1,7 @@
 import type { ElementTable } from 'claude-code'
 
-import { WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS, WEBHOOK_VARIABLES } from '../webhook'
+import { PLAIN_VARIABLES, TIME_FORMATS, TIME_VARIABLES, timeValues, WEBHOOK_HEARTBEAT_MS, WEBHOOK_MIN_GAP_MS } from '../webhook'
+import type { TimeFormat } from '../webhook'
 import type { Messages } from '../i18n'
 import { CARD_CHROME, DialogFrame, dialogHeader, IconButton, InputFrame, theme, Tiles, Toggle, Toned } from '../shared/kit'
 import type { HeaderInfo } from '../shared/kit'
@@ -19,8 +20,10 @@ export type WebhookModel = {
   preview: { body: string } | { problem: string }
   /** Why the draft's URL cannot be posted to, or null. */
   urlProblem: string | null
-  /** The last send, test or feed, as one line; null before any. */
-  lastSend: { text: string; ok: boolean } | null
+  /** The last send, test or feed, as one line, and the start of what the receiver answered; null before any. */
+  lastSend: { text: string; ok: boolean; reply: string | null } | null
+  /** The time now, which each time format's example shows. */
+  now: number
   /** Whether the surface draws an Input (every surface but mobile). */
   hasField: boolean
   m: Messages
@@ -43,18 +46,35 @@ export type WebhookActions = {
 /**
  * The webhook's settings, drawn as a dialog in the accounts pane: the on/off
  * switch, the method, the URL, the bearer token, the template file to edit
- * with the variables it may use, what it sends now, and the last send.
+ * with the variables it may use (the times grouped by format, each format
+ * said with the time now as its example), what it sends now, and the last
+ * send with the receiver's answer.
  */
 export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: WebhookActions) {
   const { Box, Text } = ui
   const Input = model.hasField && 'Input' in ui ? ui.Input : undefined
   const { m, draft } = model
   const room = Math.max(20, model.bodyColumns - CARD_CHROME)
-  const variables = packRows(
-    WEBHOOK_VARIABLES.map(name => ({ key: name, width: displayWidth(`{{${name}}}`) })),
-    room,
-    2,
-  )
+  // Variable names packed into rows of the room, two cells apart.
+  const nameRows = (key: string, names: readonly string[]) =>
+    packRows(
+      names.map(name => ({ key: name, width: displayWidth(`{{${name}}}`) })),
+      room,
+      2,
+    ).map((row, index) => (
+      <Box key={`${key}-${index}`} gap={2}>
+        {row.map(cell => (
+          <Text key={`variable-${cell.key}`}>{`{{${cell.key}}}`}</Text>
+        ))}
+      </Box>
+    ))
+  const example = timeValues(model.now)
+  const formatText: Record<TimeFormat, string> = {
+    iso: m.webhookTimeIso(example.iso),
+    epoch: m.webhookTimeEpoch(example.epoch),
+    epochMs: m.webhookTimeEpochMs(example.epochMs),
+    local: m.webhookTimeLocal(example.local),
+  }
   const previewLines = 'body' in model.preview ? model.preview.body.split('\n') : []
   const shownLines = previewLines.slice(0, PREVIEW_ROWS)
 
@@ -122,11 +142,18 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
       </Box>
       <Box key="webhook-variables" flexDirection="column" marginTop={1}>
         <Text dimColor>{m.webhookVariables}</Text>
-        {variables.map((row, index) => (
-          <Box key={`webhook-variables-${index}`} gap={2}>
-            {row.map(cell => (
-              <Text key={`variable-${cell.key}`}>{`{{${cell.key}}}`}</Text>
-            ))}
+        {nameRows('webhook-variables', PLAIN_VARIABLES)}
+      </Box>
+      <Box key="webhook-times" flexDirection="column" marginTop={1}>
+        <Text dimColor>{m.webhookTimes}</Text>
+        {TIME_FORMATS.map(format => (
+          <Box key={`webhook-time-${format}`} flexDirection="column">
+            {nameRows(`webhook-time-${format}`, TIME_VARIABLES[format])}
+            <Box key={`webhook-time-${format}-about`} marginLeft={2}>
+              <Text dimColor wrap="wrap">
+                {formatText[format]}
+              </Text>
+            </Box>
           </Box>
         ))}
       </Box>
@@ -146,6 +173,7 @@ export function WebhookDialog(ui: ElementTable, model: WebhookModel, actions: We
         )}
       </Box>
       {Toned(ui, 'webhook-last', model.lastSend?.text ?? m.webhookNeverSent, model.lastSend ? (model.lastSend.ok ? 'ok' : 'danger') : undefined, { isDim: !model.lastSend })}
+      {model.lastSend?.reply != null && Toned(ui, 'webhook-reply', truncate(m.webhookReply(model.lastSend.reply), room), undefined, { isDim: true })}
     </Box>
   )
 

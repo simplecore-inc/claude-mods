@@ -17,6 +17,8 @@ export type UsageView = {
   error?: string
   /** The last attempt was rate limited: the limits shown are the previous reading's. */
   isStale?: boolean
+  /** Orca keeps this inactive account's login, so its token is not refreshed here: the limits shown are the last lookup's. */
+  isHeld?: boolean
   /** `lookup` when the figures came from this account's own usage lookup; anything else is discarded. */
   source?: 'lookup'
   /** What the account spent past its plan, as the usage endpoint reports it; absent when it reports none. */
@@ -114,6 +116,9 @@ export type BandSpan = {
 /** What a band cell's label toggles: the accounts pane, the workspace, or the toolbox's quick tiles. */
 export type BandTarget = 'accounts' | 'workspace' | 'toolbox'
 
+/** One webhook send, test or feed: when, the HTTP status or why none came, and the start of what the receiver answered. */
+export type WebhookSend = { at: number; status: number | null; error: string | null; reply: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     /** What this plugin reads of the workspace's state. */
@@ -139,7 +144,7 @@ declare module 'claude-code' {
        */
       webhookDraft: { enabled: boolean; url: string; method: 'POST' | 'GET'; token: string; hasToken: boolean; clearToken: boolean } | null
       /** The last webhook send, test or feed, or null before any. */
-      webhookLast: { at: number; status: number | null; error: string | null } | null
+      webhookLast: WebhookSend | null
       /** The key of the element holding the keyboard in the pane, or null. */
       focused: string | null
       isRefreshing: boolean

@@ -29,6 +29,18 @@ export function pick(list: AccountView[], query: string): AccountView | undefine
   return prefixed.length === 1 ? prefixed[0] : undefined
 }
 
+/**
+ * Finds a saved account named whole: its email, in any case, or its uuid.
+ * What cannot be undone without a new /login (removing an account) takes
+ * this, never a position in a list or a prefix, which a typo can match.
+ */
+export function pickExact(list: AccountView[], query: string): AccountView | undefined {
+  const wanted = query.trim().toLowerCase()
+  if (wanted === '') return undefined
+
+  return list.find(one => one.uuid.toLowerCase() === wanted || one.email.toLowerCase() === wanted)
+}
+
 /** Whether two reset times name the same moment, allowing the server's sub-minute jitter. */
 export function isSameReset(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false

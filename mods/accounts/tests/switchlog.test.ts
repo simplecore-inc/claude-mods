@@ -25,3 +25,16 @@ test('the record keeps one change a line, the newest kept, and skips a line that
 test('a heal of this mod\'s counts as its own change, so no session calls it a change from outside', async () => {
   expect(isOwnSwitch([change('heal', 'simple@x', 2_000_000)], 'simple@x', 2_000_000 + 10_000)).toBe(true)
 })
+
+test('an Orca selection this mod asked for counts as its own; a change Orca made alone does not', async () => {
+  expect(isOwnSwitch([change('follow', 'dev@x', 3_000_000)], 'dev@x', 3_000_000 + 10_000)).toBe(true)
+  expect(isOwnSwitch([change('orca', 'dev@x', 3_000_000)], 'dev@x', 3_000_000 + 10_000)).toBe(false)
+})
+
+test('a switch its session then recorded as failed made nothing, so a change to that account is not taken for it', async () => {
+  const announced = change('switch', 'dev@x', 4_000_000)
+  const failed: LoginChange = { ...change('switch', 'dev@x', 4_000_500), failed: true }
+  expect(isOwnSwitch([announced, failed], 'dev@x', 4_000_000 + 10_000)).toBe(false)
+  // Another session's failure says nothing of this session's switch.
+  expect(isOwnSwitch([announced, { ...failed, session: 'other' }], 'dev@x', 4_000_000 + 10_000)).toBe(true)
+})

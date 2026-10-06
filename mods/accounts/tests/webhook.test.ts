@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULT_TEMPLATE_TEXT, changeKey, parseConfig, renderTemplate, urlProblem, webhookRequest, webhookValues } from '../hooks/webhook'
-import type { WebhookValues } from '../hooks/webhook'
+import { DEFAULT_TEMPLATE_TEXT, changeKey, localTime, parseConfig, renderTemplate, urlProblem, webhookRequest, webhookValues } from '../hooks/webhook'
+import type { FeedInput, WebhookValues } from '../hooks/webhook'
 
 const STATUS = {
   updatedAt: 1,
@@ -18,7 +18,7 @@ const STATUS = {
   linesRemoved: 1,
 }
 
-const values: WebhookValues = webhookValues({
+const INPUT: FeedInput = {
   session: 's1',
   now: Date.parse('2026-10-04T05:00:00Z'),
   hostname: 'box',
@@ -29,7 +29,9 @@ const values: WebhookValues = webhookValues({
   cost: 1.5,
   account: 'mina@example.com',
   limits: [{ label: '5h', percent: 60, resetsAt: '2026-10-04T08:00:00Z' }],
-})
+}
+
+const values: WebhookValues = webhookValues(INPUT)
 
 test('a placeholder standing alone becomes its value as JSON; inside a longer string, text', async () => {
   const rendered = renderTemplate('{"ctx": "{{context}}", "fast": "{{fast}}", "pr": "{{pr}}", "who": "{{account}} on {{hostname}}"}', values)
@@ -52,10 +54,35 @@ test('the default template fills into the status line input\'s shape', async () 
     model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' },
     context_window: { used_percentage: 42 },
     cost: { total_cost_usd: 1.5, total_lines_added: 3, total_lines_removed: 1 },
-    rate_limits: { five_hour: { used_percentage: 60 }, seven_day: { used_percentage: null } },
+    // Reset times in Unix seconds, as the status line input gives them.
+    rate_limits: { five_hour: { used_percentage: 60, resets_at: Date.parse('2026-10-04T08:00:00Z') / 1000 }, seven_day: { used_percentage: null, resets_at: null } },
     account: 'mina@example.com',
     hostname: 'box',
   })
+})
+
+test('each time fills in every format: ISO text in UTC, Unix seconds, Unix milliseconds, and local time with its offset', async () => {
+  const reset = webhookValues({ ...INPUT, limits: [{ label: '5h', percent: 52, resetsAt: '2026-10-06T09:20:00.000Z' }] })
+  expect(reset.fiveHourResetsAt).toBe('2026-10-06T09:20:00.000Z')
+  expect(reset.fiveHourResetsAtEpoch).toBe(1791278400)
+  expect(reset.fiveHourResetsAtEpochMs).toBe(1791278400000)
+  expect(reset.fiveHourResetsAtLocal).toBe(localTime(1791278400000))
+  expect(values.time).toBe('2026-10-04T05:00:00.000Z')
+  expect(values.timeEpoch).toBe(Date.parse('2026-10-04T05:00:00Z') / 1000)
+  expect(values.timeEpochMs).toBe(Date.parse('2026-10-04T05:00:00Z'))
+  expect(values.timestamp).toBe(values.timeEpochMs)
+  // No weekly window, or a reset time that does not parse: null in every format.
+  expect([values.weeklyResetsAt, values.weeklyResetsAtEpoch, values.weeklyResetsAtEpochMs, values.weeklyResetsAtLocal]).toEqual([null, null, null, null])
+  const garbled = webhookValues({ ...INPUT, limits: [{ label: '5h', percent: 52, resetsAt: 'soon' }] })
+  expect([garbled.fiveHourResetsAt, garbled.fiveHourResetsAtEpoch, garbled.fiveHourResetsAtLocal]).toEqual([null, null, null])
+})
+
+test('local time is the wall clock with its offset from UTC, as RFC 3339 writes it', async () => {
+  const at = Date.parse('2026-10-06T09:20:00Z')
+  expect(localTime(at, -540)).toBe('2026-10-06T18:20:00+09:00')
+  expect(localTime(at, 0)).toBe('2026-10-06T09:20:00+00:00')
+  expect(localTime(at, 300)).toBe('2026-10-06T04:20:00-05:00')
+  expect(localTime(at, -330)).toBe('2026-10-06T14:50:00+05:30')
 })
 
 test('POST sends the body as JSON; GET the top-level fields as query parameters; a token as Bearer', async () => {
@@ -83,7 +110,8 @@ test('a stored config reads field by field; anything else is the default, off', 
   expect(parseConfig(null)).toEqual({ enabled: false, url: '', method: 'POST' })
 })
 
-test('the clock alone is not a change', async () => {
-  expect(changeKey({ ...values, time: 'later', timestamp: 2 })).toBe(changeKey(values))
+test('the clock alone, in any format, is not a change; a reset time that moved is', async () => {
+  expect(changeKey({ ...values, time: 'later', timeEpoch: 3, timeEpochMs: 4, timeLocal: 'later', timestamp: 2 })).toBe(changeKey(values))
   expect(changeKey({ ...values, context: 43 })).not.toBe(changeKey(values))
+  expect(changeKey({ ...values, fiveHourResetsAtEpoch: 5 })).not.toBe(changeKey(values))
 })

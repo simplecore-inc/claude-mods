@@ -2,6 +2,7 @@ import type { HttpInit } from 'claude-code'
 
 import type { LimitView, Money, SpendView, UsageView } from '../types'
 import type { Messages } from './i18n'
+import { isAccountId } from './keychain'
 import type { Credential } from './keychain'
 
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
@@ -154,6 +155,8 @@ export function parseProfile(text: string): TokenOwner {
   if (typeof body.account?.uuid !== 'string' || typeof body.account.email !== 'string') {
     throw new AnthropicError('profile endpoint named no account')
   }
+  // The id names a keychain item and a vault file: one that could reach elsewhere is no account.
+  if (!isAccountId(body.account.uuid)) throw new AnthropicError(`profile endpoint named an account id this mod cannot file: ${JSON.stringify(body.account.uuid)}`)
 
   return {
     accountUuid: body.account.uuid,
@@ -178,6 +181,17 @@ export function failedReading(previous: UsageView | undefined, error: unknown, n
 
   // The limits kept are the last lookup's, and so is the time they were looked up.
   return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, error: describeFailure(error, m), source: 'lookup', ...spend }
+}
+
+/**
+ * The reading of an inactive account whose token Orca keeps and this mod does
+ * not refresh: the last lookup's figures and time stay, marked held, and no
+ * error is said, as nothing failed.
+ */
+export function heldReading(previous: UsageView | undefined, now: number): UsageView {
+  const kept = isLookedUp(previous) ? previous : undefined
+
+  return { limits: kept?.limits ?? [], fetchedAt: kept?.fetchedAt ?? now, isHeld: true, source: 'lookup', ...(kept?.spend ? { spend: kept.spend } : {}) }
 }
 
 /** Whether a reading came from its own account's lookup, the one source trusted for its figures. */
@@ -220,6 +234,7 @@ export function withMeasured(previous: UsageView | undefined, windows: MeasuredW
 /** A failure as the pane shows it. */
 export function describeFailure(error: unknown, m: Messages): string {
   if (error instanceof AnthropicError && (error.status === 400 || error.status === 401)) return m.authExpired
+  if (error instanceof AnthropicError && error.status !== undefined) return m.serverError(error.status)
 
   return error instanceof Error ? error.message : String(error)
 }
