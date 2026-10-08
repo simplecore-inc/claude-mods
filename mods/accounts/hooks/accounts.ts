@@ -394,11 +394,19 @@ async function applyPendingOrca(ctx: AccountsContext, claude: OrcaClaude): Promi
   return true
 }
 
-/** Keeps what Orca says current, machine-wide every few minutes, and makes a selection that waits for Orca once it answers. */
-export async function tickOrca(ctx: AccountsContext): Promise<void> {
-  if (!(await isOrcaCheckDue(ctx.io))) return
+/**
+ * Keeps what Orca says current, machine-wide every few minutes, and makes a
+ * selection that waits for Orca once it answers.
+ *
+ * @returns what Orca said, when it was asked now and answered; null otherwise
+ */
+export async function tickOrca(ctx: AccountsContext): Promise<OrcaClaude | null> {
+  if (!(await isOrcaCheckDue(ctx.io))) return null
   const reach = await orcaClaude(ctx.io, ctx.messages())
-  if (reach.kind === 'ok') await applyPendingOrca(ctx, reach.claude)
+  if (reach.kind !== 'ok') return null
+  await applyPendingOrca(ctx, reach.claude)
+
+  return reach.claude
 }
 
 /**

@@ -2,6 +2,16 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.6.3 (2026-10-08)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Selecting an account in Orca no longer signs the running sessions out. Orca writes the selected account's saved login as it is while a Claude terminal runs in it, even when it has expired, and every session then refreshed the same token at once. On macOS, sc-accounts now refreshes the login Orca keeps for each account within an hour of its expiry and writes it to Orca's copy and its own, while both hold the same grant; the live account and the one selected in Orca are left alone.
+- A saved login of Orca's that the server refuses to refresh is said once, with the account to sign in to again before selecting it in Orca.
+
 ## 0.6.2 (2026-10-06)
 
 ### Accounts (`sc-accounts`)

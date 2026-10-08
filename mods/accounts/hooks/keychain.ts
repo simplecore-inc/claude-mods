@@ -35,6 +35,8 @@ export function keychainAccountName(user: string | undefined): string {
 }
 /** The keychain service this mod keeps one item per saved account under. */
 export const VAULT_SERVICE = 'account-switch'
+/** The keychain service Orca keeps each Claude account's login under, the account named by Orca's account id. */
+export const ORCA_COPY_SERVICE = 'Orca Claude Code Managed Credentials'
 /** `security`'s exit code for an item that is not there. */
 export const ITEM_NOT_FOUND = 44
 

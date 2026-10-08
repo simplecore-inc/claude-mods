@@ -14,6 +14,7 @@ import type { Locale, Messages } from './i18n'
 import type { Cell, EnvName, Io } from './io'
 import { message } from './io'
 import { adoptMeasured, pollLive } from './lookups'
+import { keepOrcaCopiesFresh } from './orcaCopies'
 import { adoptSession, answerCommand, openPane, paneActions, paneModel, refresh, syncPaneOpen, toggle } from './paneControl'
 import type { PaneContext } from './paneControl'
 import { collectStatus, countLines, noteEffortCommand, noteRequestEffort, startStatus } from './sessionStatus'
@@ -340,7 +341,10 @@ export const register: Register = (on, options) => {
       const ctx = pane.accounts
       void syncLive(ctx)
         .catch((error: unknown) => debugLog($, error))
-        .then(() => tickOrca(ctx).catch((error: unknown) => debugLog($, error)))
+        .then(() => tickOrca(ctx))
+        // Orca writes a copy as it is while a Claude terminal runs in it: each is kept from expiring.
+        .then(claude => (claude ? keepOrcaCopiesFresh(ctx, claude) : undefined))
+        .catch((error: unknown) => debugLog($, error))
         .then(() => refresh(pane, false))
         // The live account is kept current between Claude Code's own readings too.
         .then(() => pollLive(ctx))

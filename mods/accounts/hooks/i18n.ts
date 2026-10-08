@@ -58,6 +58,7 @@ const en = {
   loginChangedByOrca: (from: string, to: string) => `Orca switched the login from ${from} to ${to}.`,
   orcaFollowed: (to: string) => `The login changed to ${to} outside sc-accounts and Orca, so ${to} was selected in Orca too and stays.`,
   orcaFollowFailed: (to: string, reason: string) => `The login changed to ${to}, but it could not be selected in Orca (${reason}); Orca may put its own login back.`,
+  orcaCopyRefused: (email: string) => `The login Orca keeps for ${email} was refused when refreshed. Run /login as ${email} before selecting it in Orca, or every session signs out.`,
   orcaWillRevert: (to: string, active: string) =>
     `The login changed to ${to}, which Orca holds no login for; Orca puts ${active} back the next time it writes the login. Add ${to} in Orca to keep it.`,
   orcaAppliedPending: (email: string) => `${email}, chosen while Orca was not running, is now selected in Orca too.`,
@@ -224,6 +225,7 @@ const ko: Messages = {
   loginChangedByOrca: (from, to) => `Orca가 로그인을 ${from}에서 ${to}(으)로 바꿨습니다.`,
   orcaFollowed: to => `sc-accounts와 Orca 밖에서 로그인이 ${to}(으)로 바뀌어, Orca에서도 ${to} 계정을 선택해 이 로그인을 유지합니다.`,
   orcaFollowFailed: (to, reason) => `로그인이 ${to}(으)로 바뀌었지만 Orca에서 이 계정을 선택하지 못했습니다(${reason}). Orca가 이전 로그인으로 되돌릴 수 있습니다.`,
+  orcaCopyRefused: email => `Orca에 저장된 ${email} 로그인을 갱신하려 했지만 거부됐습니다. Orca에서 이 계정을 선택하기 전에 ${email} 계정으로 /login을 실행해 주세요. 그대로 선택하면 모든 세션이 로그아웃됩니다.`,
   orcaWillRevert: (to, active) =>
     `로그인이 ${to}(으)로 바뀌었지만 Orca에는 이 계정의 로그인이 없어서, Orca가 다음에 로그인을 기록할 때 ${active} 계정으로 되돌립니다. 이 계정을 계속 쓰려면 Orca에 추가해 주세요.`,
   orcaAppliedPending: email => `Orca가 실행되지 않던 동안 고른 ${email} 계정을 Orca에서도 선택했습니다.`,

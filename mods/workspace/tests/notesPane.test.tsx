@@ -53,7 +53,7 @@ test('pressing Send with prompts sets the notesInContext setting', async ($, on)
   on('config.set', ($, e) => {
     writes.push({ key: e.key, value: e.value })
 
-    return { value: { value: e.value } as never }
+    return { value: e.value as never }
   })
   on('ui.toast', () => ({ value: undefined as never }))
   const ui = await mountPane($, 'terminal')

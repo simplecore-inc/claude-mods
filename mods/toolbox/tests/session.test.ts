@@ -35,7 +35,7 @@ test('after /clear the toolbox shows its tools again, and a run it still holds a
   on('process.spawn', async function* (): AsyncGenerator<never, never> {
     await ended
 
-    return { code: 0, signal: null } as never
+    return { value: { code: 0, signal: null } } as never
   })
   mock.env(on, {})
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T05:00:00Z') } as never)

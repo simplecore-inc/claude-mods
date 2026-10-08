@@ -6,6 +6,7 @@ import { message, within } from './io'
 import {
   ITEM_NOT_FOUND,
   KeychainError,
+  ORCA_COPY_SERVICE,
   VAULT_SERVICE,
   addLine,
   credentialsDirectory,
@@ -301,6 +302,49 @@ export async function writeLiveOauthAccount(io: Io, account: OauthAccount | null
  * when it comes. `noAnswer` is what the person reads when it does not answer
  * in time.
  */
+/** What keeping Orca's copy of a saved login fresh came to: refreshed, fresh enough, not the same grant as this mod's, or no copy. */
+export type OrcaCopyStep = 'refreshed' | 'fresh' | 'apart' | 'absent'
+
+/**
+ * Refreshes a saved login Orca keeps a copy of once either copy expires within
+ * `marginMs`, and writes the new grant to this mod's copy and to Orca's. Orca
+ * applies its copy as it is while a Claude terminal runs in it, so an expired
+ * copy has every running session refresh one refresh token at once, and all
+ * but the first are signed out. The two copies are refreshed only while they
+ * hold the same refresh token, under the account's refresh lock; any other
+ * copy of Orca's is left alone. Orca keeps its copies in the keychain on macOS
+ * alone, so elsewhere nothing is done.
+ */
+export async function refreshOrcaCopy(io: Io, uuid: string, orcaId: string, marginMs: number, noAnswer: string): Promise<OrcaCopyStep> {
+  const { backend, isWindows } = await platformOf(io)
+  if (backend !== 'keychain' || !isAccountId(orcaId)) return 'absent'
+  const lockPath = `${await claudeDirectory(io)}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
+
+  return withLock(io, lockPath, { ...REFRESH_LOCK, isWindows }, async () => {
+    const saved = await readVault(io, uuid)
+    const text = await findSecret(io, ORCA_COPY_SERVICE, orcaId)
+    if (saved === null || text === null) return 'absent'
+    const copy = parseCredential(text)
+    const now = await io.now()
+    if (!needsRefresh(saved, now, marginMs) && !needsRefresh(copy, now, marginMs)) return 'fresh'
+    if (!isSameGrant(saved, copy)) return 'apart'
+    const apply = async (response: HttpResponse): Promise<OrcaCopyStep> => {
+      if (!response.ok) throw new AnthropicError(`token refresh answered ${response.status}`, response.status)
+      const fresh = applyRefresh(saved, response.text, now)
+      await writeVault(io, uuid, fresh)
+      const { accessToken, refreshToken, expiresAt } = fresh.claudeAiOauth
+      await storeSecret(io, ORCA_COPY_SERVICE, orcaId, JSON.stringify({ ...copy, claudeAiOauth: { ...copy.claudeAiOauth, accessToken, refreshToken, expiresAt } }))
+
+      return 'refreshed'
+    }
+    const response = await within(io, io.fetch(TOKEN_URL, refreshInit(saved)), REFRESH_TIMEOUT_MS, noAnswer, late => {
+      void apply(late).catch((error: unknown) => io.log(`a late token refresh could not be saved: ${message(error)}`))
+    })
+
+    return apply(response)
+  })
+}
+
 export async function ensureFresh(io: Io, uuid: string, credential: Credential, live: Credential | null, noAnswer: string): Promise<Credential> {
   if (!needsRefresh(credential, await io.now()) || isSameGrant(credential, live)) return credential
   const { isWindows } = await platformOf(io)

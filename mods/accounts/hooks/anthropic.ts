@@ -101,8 +101,9 @@ export function usageInit(auth: { token: string } | { handle: string }): HttpIni
   return { headers: { 'anthropic-beta': OAUTH_BETA, Authorization: `Bearer ${auth.token}` } }
 }
 
-export function needsRefresh(credential: Credential, now: number): boolean {
-  return credential.claudeAiOauth.expiresAt - EXPIRY_MARGIN_MS <= now
+/** Whether a token expires within `marginMs` (five minutes unless said): refreshed before it is used. */
+export function needsRefresh(credential: Credential, now: number, marginMs = EXPIRY_MARGIN_MS): boolean {
+  return credential.claudeAiOauth.expiresAt - marginMs <= now
 }
 
 export function refreshInit(credential: Credential): HttpInit {
