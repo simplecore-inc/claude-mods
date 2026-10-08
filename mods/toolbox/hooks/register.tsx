@@ -6,6 +6,9 @@ import { BUILD_FILES, detectTasks, MARKER_FILES, parseGradleTaskList, pnpmWorksp
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
 import { LOG_FILE_BYTES, LogBuffer, newestPart, pathSuggestions, progressOf, splitTyped } from './paths'
+import { releaseHeader } from './shared/release'
+import { LATEST_RELEASE_KEY, RELEASE_CHECK_MS, latestReleaseUrl, latestVersion } from './shared/release'
+import type { RunningRelease } from './shared/release'
 import { isBesideOtherPanes } from './shared/panes'
 import { Dialog, FormDialog, Header, LogDialog, paneTitle, TabBar, Tiles } from './shared/kit'
 import type { FormField, Tile } from './shared/kit'
@@ -95,7 +98,7 @@ function opened(text: string): string {
 
   return text
 }
-let release: { version?: string; date?: string } = {}
+let release: RunningRelease = {}
 /** The project's root: where `.toolbox/` lives and commands run from. */
 let root = ''
 let isWindows = false
@@ -123,19 +126,35 @@ function debug($: EngineInterface, error: unknown): void {
 
 const toolboxPath = (name: string) => `${root}/${TOOLBOX_DIR}/${name}`
 
-async function readRelease($: EngineInterface): Promise<{ version?: string; date?: string }> {
+async function readRelease($: EngineInterface): Promise<RunningRelease> {
   try {
-    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
+    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string; repository?: string }
     if (typeof manifest.version !== 'string') return {}
     const changelogPath = `${$.plugin.root}/CHANGELOG.md`
     const changelog = (await $.fs.exists(changelogPath)) ? await $.fs.read(changelogPath) : ''
 
-    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version) }
+    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version), repository: manifest.repository }
   } catch (error) {
     debug($, error)
 
     return {}
   }
+}
+
+/** Hears of the latest published release, so the pane header says when an update is due. */
+async function followLatestRelease($: EngineInterface): Promise<void> {
+  const url = latestReleaseUrl(release.repository)
+  if (url === null) return
+  const latest = await latestVersion(
+    {
+      now: () => $.clock.now(),
+      get: () => $.store.get(LATEST_RELEASE_KEY),
+      set: value => $.store.set(LATEST_RELEASE_KEY, value),
+      fetch: (target, init) => $.http.fetch(target, init),
+    },
+    url,
+  )
+  release = { ...release, latest }
 }
 
 // ── tools ─────────────────────────────────────────────────────────────────
@@ -564,6 +583,11 @@ export const register: Register = on => {
     locale = resolveLocale(language, [await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG')])
     m = messagesFor(locale)
     release = await readRelease($)
+    // A later published release turns the header's date into Update Required: asked now and every few hours.
+    void followLatestRelease($).catch((error: unknown) => debug($, error))
+    $.clock.every(RELEASE_CHECK_MS, () => {
+      void followLatestRelease($).catch((error: unknown) => debug($, error))
+    })
     isWindows = (await $.env.get('OS')) === 'Windows_NT'
     await adoptSession($)
 
@@ -644,7 +668,7 @@ export const register: Register = on => {
     const bodyColumns = e.props.bodyColumns ?? 60
     const header = {
       brand: paneTitle(MOD_NAME),
-      release: release.version ? m.release(release.version, release.date) : undefined,
+      ...releaseHeader(release, m.release, m.updateRequired),
       isUnderTabs: isBesideOtherPanes('sc-toolbox', {
       'sc-accounts': (await $.state.get({ plugin: 'sc-accounts', key: 'paneOpen' })).value === true,
       'sc-workspace': (await $.state.get({ plugin: 'sc-workspace', key: 'paneOpen' })).value === true,

@@ -16,6 +16,8 @@ import { refreshAll, refreshLive } from './lookups'
 import { rememberedOrca } from './orcaClient'
 import { beginSession, collectStatus } from './sessionStatus'
 import type { StatusContext } from './sessionStatus'
+import { releaseHeader } from './shared/release'
+import type { RunningRelease } from './shared/release'
 import { paneTitle } from './shared/kit'
 import { resetClock } from './shared/time'
 import { remove, switchTo } from './switching'
@@ -71,7 +73,7 @@ export type PaneContext = {
     isUnderTabs: () => Promise<boolean>
   }
   session: { model: () => Promise<string>; cwd: () => Promise<string>; cost: () => Promise<number | null> }
-  view: { locale: () => Locale; messages: () => Messages; release: () => { version?: string; date?: string }; homePath: () => string }
+  view: { locale: () => Locale; messages: () => Messages; release: () => RunningRelease; homePath: () => string }
 }
 
 /** The mod's name in the pane's title; a name, so it is never translated. */
@@ -243,7 +245,7 @@ export async function paneModel(ctx: PaneContext, bodyColumns: number, hasField:
     hasField,
     header: {
       brand: paneTitle(MOD_NAME),
-      release: release.version ? m.release(release.version, release.date) : undefined,
+      ...releaseHeader(release, m.release, m.updateRequired),
       isUnderTabs: await ctx.ui.isUnderTabs(),
       columns: bodyColumns,
       exit: { label: `✕ ${m.closeButton}`, onPress: () => void closePane(ctx).catch((error: unknown) => ctx.ui.toast(message(error))) },

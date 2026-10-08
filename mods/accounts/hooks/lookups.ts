@@ -3,14 +3,16 @@ import { AnthropicError, USAGE_URL, failedReading, heldReading, lookedUpOnly, ne
 import type { MeasuredWindow } from './anthropic'
 import { USAGE_KEY, exclusive, figuresTrustedFrom, isLiveTokenOf, oauthAccountKey, organizationOf, savedIds, syncLive } from './accounts'
 import type { AccountsContext } from './accounts'
-import { REFRESH_TIMEOUT_MS, ensureFresh, liveOauthAccount, readLiveCredential, readVault } from './credentials'
+import { REFRESH_TIMEOUT_MS, ensureFresh, liveOauthAccount, readLiveCredential, readVault, refreshOrcaCopy } from './credentials'
 import type { OauthAccount } from './credentials'
 import { message, within } from './io'
 import { isSameGrant } from './keychain'
 import type { Credential } from './keychain'
 import { LockBusyError } from './lock'
-import { isKeptByOrca } from './orca'
-import { rememberedOrca } from './orcaClient'
+import { orcaAccountFor } from './orca'
+import type { OrcaAccount } from './orca'
+import { ORCA_COPY_MARGIN_MS } from './orcaCopies'
+import { orcaCopyPlace, rememberedOrca } from './orcaClient'
 import { LIVE_POLL_MS, afterRateLimit, afterSuccess, isAutomaticLookupDue, readShared } from './schedule'
 
 /**
@@ -28,16 +30,40 @@ const USAGE_TIMEOUT_MS = 15_000
 /** The login changed between reading whose it is and looking it up: the answer would be another account's. */
 class LoginChangedError extends Error {}
 
-/** An inactive account's token needs refreshing, and Orca keeps a copy of its login: it is left to Orca, not refreshed here. */
+/**
+ * An inactive account's token needs refreshing, and Orca keeps a copy of its
+ * login where this mod cannot reach it (no keychain item, or no folder Orca
+ * marks as that account's): refreshing only this mod's copy would leave Orca's
+ * spent, so it is left alone.
+ */
 class HeldByOrcaError extends Error {}
 
-/** Whether Orca keeps a copy of a saved account's login, so its token is never refreshed here. */
-async function isHeldByOrca(ctx: AccountsContext, uuid: string): Promise<boolean> {
+/** The Orca account that keeps a copy of a saved account's login, as Orca last said; undefined when it keeps none. */
+async function orcaKeeperOf(ctx: AccountsContext, uuid: string): Promise<OrcaAccount | undefined> {
   const email = (await ctx.accounts.get()).find(one => one.uuid === uuid)?.email
-  if (email === undefined) return false
+  const remembered = await rememberedOrca(ctx.io)
+  if (email === undefined || remembered === null) return undefined
   const details = (await ctx.io.store.get(oauthAccountKey(uuid))) as OauthAccount | undefined
 
-  return isKeptByOrca(await rememberedOrca(ctx.io), email, organizationOf(details))
+  return orcaAccountFor(remembered, email, organizationOf(details))
+}
+
+/**
+ * A saved account's token, refreshed first when it nears expiry. Where Orca
+ * keeps a copy of the same grant, both copies are refreshed together, so Orca
+ * never writes a spent login later.
+ */
+async function savedToken(ctx: AccountsContext, uuid: string, saved: Credential, live: Credential | null): Promise<string> {
+  const { io } = ctx
+  const noAnswer = ctx.messages().refreshNoAnswer(REFRESH_TIMEOUT_MS / 1000)
+  const keeper = needsRefresh(saved, await io.now()) ? await orcaKeeperOf(ctx, uuid) : undefined
+  if (!keeper) return (await ensureFresh(io, uuid, saved, live, noAnswer)).claudeAiOauth.accessToken
+  const place = await orcaCopyPlace(io, keeper.id)
+  const step = place === null ? 'absent' : await refreshOrcaCopy(io, uuid, place, ORCA_COPY_MARGIN_MS, noAnswer)
+  const fresh = step === 'refreshed' || step === 'fresh' ? await readVault(io, uuid) : null
+  if (fresh === null) throw new HeldByOrcaError(uuid)
+
+  return fresh.claudeAiOauth.accessToken
 }
 
 /**
@@ -57,9 +83,7 @@ async function readingFor(ctx: AccountsContext, uuid: string, liveUuid: string |
     token = live.claudeAiOauth.accessToken
   } else {
     if (saved === null) throw new Error(m.noStoredLogin)
-    // Refreshing would spend the refresh token Orca's copy holds, and Orca would later write a spent login.
-    if (needsRefresh(saved, await io.now()) && (await isHeldByOrca(ctx, uuid))) throw new HeldByOrcaError(uuid)
-    token = (await ensureFresh(io, uuid, saved, live, m.refreshNoAnswer(REFRESH_TIMEOUT_MS / 1000))).claudeAiOauth.accessToken
+    token = await savedToken(ctx, uuid, saved, live)
   }
   const response = await within(io, io.fetch(USAGE_URL, usageInit({ token })), USAGE_TIMEOUT_MS, m.usageNoAnswer(USAGE_TIMEOUT_MS / 1000))
   if (!response.ok) throw new AnthropicError(`usage endpoint answered ${response.status}`, response.status, response.headers['retry-after'])

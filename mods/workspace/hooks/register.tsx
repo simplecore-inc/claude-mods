@@ -4,6 +4,9 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AgentActivity, AgentRow, CheckpointRow, DiffPoint, DiffView, MemoryFile, MemoryKind, MemoryScope, Note, Tab, WorktreeRow } from '../types'
 import { claudeFiles, frontmatterOf, importsOf, isPathRule, markdownPages, outlineOf, pageOfLine, reflow, searchMemory } from './memory'
 import { MemoryTab } from './views/memory'
+import { releaseHeader } from './shared/release'
+import { LATEST_RELEASE_KEY, RELEASE_CHECK_MS, latestReleaseUrl, latestVersion } from './shared/release'
+import type { RunningRelease } from './shared/release'
 import { projectFolder } from './shared/claude'
 import { checkpointRef, clipDiff, diffPages, finishAgents, keptCheckpoints, promptLabel, shortPath } from './git'
 import { adoptStored, changeList, listPaths, readList } from './lists'
@@ -124,7 +127,7 @@ function opened(text: string): string {
 
   return text
 }
-let release: { version?: string; date?: string } = {}
+let release: RunningRelease = {}
 /** The repository's top directory, or null outside a repository. */
 let root: string | null = null
 let home: string | undefined
@@ -207,19 +210,35 @@ function projectName(): string {
   return root ? (root.split('/').pop() ?? root) : ''
 }
 
-async function readRelease($: EngineInterface): Promise<{ version?: string; date?: string }> {
+async function readRelease($: EngineInterface): Promise<RunningRelease> {
   try {
-    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
+    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string; repository?: string }
     if (typeof manifest.version !== 'string') return {}
     const changelogPath = `${$.plugin.root}/CHANGELOG.md`
     const changelog = (await $.fs.exists(changelogPath)) ? await $.fs.read(changelogPath) : ''
 
-    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version) }
+    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version), repository: manifest.repository }
   } catch (error) {
     debug($, error)
 
     return {}
   }
+}
+
+/** Hears of the latest published release, so the pane header says when an update is due. */
+async function followLatestRelease($: EngineInterface): Promise<void> {
+  const url = latestReleaseUrl(release.repository)
+  if (url === null) return
+  const latest = await latestVersion(
+    {
+      now: () => $.clock.now(),
+      get: () => $.store.get(LATEST_RELEASE_KEY),
+      set: value => $.store.set(LATEST_RELEASE_KEY, value),
+      fetch: (target, init) => $.http.fetch(target, init),
+    },
+    url,
+  )
+  release = { ...release, latest }
 }
 
 // ── agents and worktrees ──────────────────────────────────────────────────
@@ -983,6 +1002,11 @@ export const register: Register = (on, options) => {
     locale = resolveLocale(language, [await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG')])
     m = messagesFor(locale)
     release = await readRelease($)
+    // A later published release turns the header's date into Update Required: asked now and every few hours.
+    void followLatestRelease($).catch((error: unknown) => debug($, error))
+    $.clock.every(RELEASE_CHECK_MS, () => {
+      void followLatestRelease($).catch((error: unknown) => debug($, error))
+    })
     // Windows has USERPROFILE and backslashes; git prints its paths with forward slashes.
     home = ((await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')))?.replaceAll('\\', '/')
     isWindows = (await $.env.get('OS')) === 'Windows_NT'
@@ -1194,7 +1218,7 @@ export const register: Register = (on, options) => {
     })
     const header = {
       brand: paneTitle(MOD_NAME),
-      release: release.version ? m.release(release.version, release.date) : undefined,
+      ...releaseHeader(release, m.release, m.updateRequired),
       isUnderTabs,
       columns: bodyColumns,
       exit: { label: `✕ ${m.closeButton}`, onPress: () => void closePane($).catch((error: unknown) => $.ui.toast(message(error))) },

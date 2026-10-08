@@ -292,6 +292,79 @@ export async function writeLiveOauthAccount(io: Io, account: OauthAccount | null
 }
 
 /**
+ * Where Orca keeps its copy of one account's login: on macOS a keychain item
+ * named by Orca's account id, elsewhere `.credentials.json` in the account's
+ * folder, which Orca marks as its own.
+ */
+export type OrcaCopyPlace = { kind: 'keychain'; orcaId: string } | { kind: 'file'; path: string }
+
+async function readOrcaCopy(io: Io, place: OrcaCopyPlace): Promise<string | null> {
+  return place.kind === 'keychain' ? findSecret(io, ORCA_COPY_SERVICE, place.orcaId) : readIfPresent(io, place.path)
+}
+
+async function writeOrcaCopy(io: Io, place: OrcaCopyPlace, text: string): Promise<void> {
+  if (place.kind === 'keychain') await storeSecret(io, ORCA_COPY_SERVICE, place.orcaId, text)
+  else await writeAtomic(io, place.path, text, { isPrivate: true, isWindows: (await platformOf(io)).isWindows })
+}
+
+/** What keeping Orca's copy of a saved login fresh came to: refreshed, fresh enough, or no copy to refresh. */
+export type OrcaCopyStep = 'refreshed' | 'fresh' | 'absent'
+
+/**
+ * Refreshes a saved login Orca keeps a copy of once either copy expires within
+ * `marginMs`, and writes the new grant to this mod's copy and to Orca's. Orca
+ * applies its copy as it is while a Claude terminal runs in it, so an expired
+ * or spent copy has every running session refresh a dead token at once, and
+ * all of them are signed out.
+ *
+ * Two copies of different grants are usually one grant rotated in one place
+ * and not the other, the older refresh token already spent; or two logins
+ * made apart, both alive. So the grant that expires later is refreshed first,
+ * the other only when the server refuses it, and whichever refreshes is
+ * written to both. It runs under the account's refresh lock, the copies read
+ * again inside it.
+ */
+export async function refreshOrcaCopy(io: Io, uuid: string, place: OrcaCopyPlace, marginMs: number, noAnswer: string): Promise<OrcaCopyStep> {
+  const { isWindows } = await platformOf(io)
+  const lockPath = `${await claudeDirectory(io)}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
+
+  return withLock(io, lockPath, { ...REFRESH_LOCK, isWindows }, async () => {
+    const saved = await readVault(io, uuid)
+    const text = await readOrcaCopy(io, place)
+    if (saved === null || text === null) return 'absent'
+    const copy = parseCredential(text)
+    const now = await io.now()
+    const isDue = needsRefresh(saved, now, marginMs) || needsRefresh(copy, now, marginMs)
+    // Two fresh copies are left as they are, apart or not: the later grant reaches both once one is due.
+    if (!isDue) return 'fresh'
+    const candidates = isSameGrant(saved, copy) || saved.claudeAiOauth.expiresAt >= copy.claudeAiOauth.expiresAt ? [saved, copy] : [copy, saved]
+    const save = async (from: Credential, response: HttpResponse): Promise<OrcaCopyStep> => {
+      if (!response.ok) throw new AnthropicError(`token refresh answered ${response.status}`, response.status)
+      const fresh = applyRefresh(from, response.text, now)
+      const { accessToken, refreshToken, expiresAt } = fresh.claudeAiOauth
+      await writeVault(io, uuid, { ...saved, claudeAiOauth: { ...saved.claudeAiOauth, accessToken, refreshToken, expiresAt } })
+      await writeOrcaCopy(io, place, JSON.stringify({ ...copy, claudeAiOauth: { ...copy.claudeAiOauth, accessToken, refreshToken, expiresAt } }))
+
+      return 'refreshed'
+    }
+    let refused: unknown
+    for (const candidate of isSameGrant(saved, copy) ? [saved] : candidates) {
+      const response = await within(io, io.fetch(TOKEN_URL, refreshInit(candidate)), REFRESH_TIMEOUT_MS, noAnswer, late => {
+        void save(candidate, late).catch((error: unknown) => io.log(`a late token refresh could not be saved: ${message(error)}`))
+      })
+      try {
+        return await save(candidate, response)
+      } catch (error) {
+        // Refused: this grant is spent or revoked, and the other copy's may still be alive.
+        if (!(error instanceof AnthropicError) || error.status === undefined || error.status >= 500) throw error
+        refused = error
+      }
+    }
+    throw refused
+  })
+}
+
+/**
  * A saved account's login, its access token refreshed first when it is near
  * expiry. The grant Claude Code holds (`live`) is never refreshed here: a
  * refresh rotates the refresh token under Claude Code, so it is handed back as
@@ -302,49 +375,6 @@ export async function writeLiveOauthAccount(io: Io, account: OauthAccount | null
  * when it comes. `noAnswer` is what the person reads when it does not answer
  * in time.
  */
-/** What keeping Orca's copy of a saved login fresh came to: refreshed, fresh enough, not the same grant as this mod's, or no copy. */
-export type OrcaCopyStep = 'refreshed' | 'fresh' | 'apart' | 'absent'
-
-/**
- * Refreshes a saved login Orca keeps a copy of once either copy expires within
- * `marginMs`, and writes the new grant to this mod's copy and to Orca's. Orca
- * applies its copy as it is while a Claude terminal runs in it, so an expired
- * copy has every running session refresh one refresh token at once, and all
- * but the first are signed out. The two copies are refreshed only while they
- * hold the same refresh token, under the account's refresh lock; any other
- * copy of Orca's is left alone. Orca keeps its copies in the keychain on macOS
- * alone, so elsewhere nothing is done.
- */
-export async function refreshOrcaCopy(io: Io, uuid: string, orcaId: string, marginMs: number, noAnswer: string): Promise<OrcaCopyStep> {
-  const { backend, isWindows } = await platformOf(io)
-  if (backend !== 'keychain' || !isAccountId(orcaId)) return 'absent'
-  const lockPath = `${await claudeDirectory(io)}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
-
-  return withLock(io, lockPath, { ...REFRESH_LOCK, isWindows }, async () => {
-    const saved = await readVault(io, uuid)
-    const text = await findSecret(io, ORCA_COPY_SERVICE, orcaId)
-    if (saved === null || text === null) return 'absent'
-    const copy = parseCredential(text)
-    const now = await io.now()
-    if (!needsRefresh(saved, now, marginMs) && !needsRefresh(copy, now, marginMs)) return 'fresh'
-    if (!isSameGrant(saved, copy)) return 'apart'
-    const apply = async (response: HttpResponse): Promise<OrcaCopyStep> => {
-      if (!response.ok) throw new AnthropicError(`token refresh answered ${response.status}`, response.status)
-      const fresh = applyRefresh(saved, response.text, now)
-      await writeVault(io, uuid, fresh)
-      const { accessToken, refreshToken, expiresAt } = fresh.claudeAiOauth
-      await storeSecret(io, ORCA_COPY_SERVICE, orcaId, JSON.stringify({ ...copy, claudeAiOauth: { ...copy.claudeAiOauth, accessToken, refreshToken, expiresAt } }))
-
-      return 'refreshed'
-    }
-    const response = await within(io, io.fetch(TOKEN_URL, refreshInit(saved)), REFRESH_TIMEOUT_MS, noAnswer, late => {
-      void apply(late).catch((error: unknown) => io.log(`a late token refresh could not be saved: ${message(error)}`))
-    })
-
-    return apply(response)
-  })
-}
-
 export async function ensureFresh(io: Io, uuid: string, credential: Credential, live: Credential | null, noAnswer: string): Promise<Credential> {
   if (!needsRefresh(credential, await io.now()) || isSameGrant(credential, live)) return credential
   const { isWindows } = await platformOf(io)

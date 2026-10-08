@@ -7,6 +7,7 @@ type Kind = 'shell' | 'claude' | 'prompt'
 
 const en = {
   release: (version: string, date?: string) => (date ? `v${version} (${date})` : `v${version}`),
+  updateRequired: 'Update Required',
   loading: 'Loading…',
   closeButton: 'Close',
   clickHint: 'Clicks reach the panes only in fullscreen mode (/tui fullscreen); here, ctrl+x tab focuses the pane, then Tab or the arrows move and Enter presses.',
@@ -117,6 +118,7 @@ export type Messages = typeof en
 
 const ko: Messages = {
   release: (version, date) => (date ? `v${version} (${date})` : `v${version}`),
+  updateRequired: '업데이트 필요',
   loading: '불러오는 중…',
   closeButton: '닫기',
   clickHint: '클릭은 전체 화면 모드(/tui fullscreen)에서만 창에 전달됩니다. 지금은 ctrl+x tab으로 창에 포커스를 준 뒤 Tab이나 화살표로 이동하고 Enter로 누르세요.',

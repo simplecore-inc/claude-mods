@@ -272,12 +272,12 @@ test('with Orca writing the Claude login, the switch dialog says the account is 
   await ui.unmount()
 })
 
-test('an account whose login Orca keeps says why its figures age, with no error', async ($, on) => {
+test('an account whose login Orca keeps out of reach says why its figures age, with no error', async ($, on) => {
   seedState(on, {
     usage: { u2: { limits: [{ label: '5h', percent: 12 }], fetchedAt: 0, isHeld: true, source: 'lookup' } },
   })
   const ui = await mountPane($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: 'Orca keeps this login, so its token is not refreshed here; the figures are looked up again once the account is in use.' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Orca keeps this login where sc-accounts cannot refresh it, so the figures are looked up again once the account is in use.' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /expired/ })).toBeUndefined()
   await ui.unmount()
 })

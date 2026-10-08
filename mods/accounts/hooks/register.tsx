@@ -19,6 +19,8 @@ import { adoptSession, answerCommand, openPane, paneActions, paneModel, refresh,
 import type { PaneContext } from './paneControl'
 import { collectStatus, countLines, noteEffortCommand, noteRequestEffort, startStatus } from './sessionStatus'
 import type { StatusContext } from './sessionStatus'
+import { LATEST_RELEASE_KEY, RELEASE_CHECK_MS, latestReleaseUrl, latestVersion } from './shared/release'
+import type { RunningRelease } from './shared/release'
 import { isBesideOtherPanes } from './shared/panes'
 import { editedPath, lineChanges } from './status'
 import type { EffortSettings } from './status'
@@ -74,7 +76,7 @@ const MAX_COUNTED_FILE = 4 * 1024 * 1024
 let locale: Locale = 'en'
 let m: Messages = messagesFor(locale)
 /** This build's version and release date, read from the plugin's own files at session start. */
-let release: { version?: string; date?: string } = {}
+let release: RunningRelease = {}
 /** When this session's current model turn began; 0 before the first. */
 let turnStartedAt = 0
 let sessionId = ''
@@ -271,19 +273,35 @@ function paneContext($: EngineInterface): PaneContext {
 // ── the session ────────────────────────────────────────────────────────────
 
 /** The version `plugin.json` states and the date `CHANGELOG.md` gives that version. */
-async function readRelease($: EngineInterface): Promise<{ version?: string; date?: string }> {
+async function readRelease($: EngineInterface): Promise<RunningRelease> {
   try {
-    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
+    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string; repository?: string }
     if (typeof manifest.version !== 'string') return {}
     const changelogPath = `${$.plugin.root}/CHANGELOG.md`
     const changelog = (await $.fs.exists(changelogPath)) ? await $.fs.read(changelogPath) : ''
 
-    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version) }
+    return { version: manifest.version, date: releaseDateOf(changelog, manifest.version), repository: manifest.repository }
   } catch (error) {
     $.ui.log(`account-switch: cannot read the release: ${message(error)}`, { to: 'debug' })
 
     return {}
   }
+}
+
+/** Hears of the latest published release, so the pane header says when an update is due. */
+async function followLatestRelease($: EngineInterface): Promise<void> {
+  const url = latestReleaseUrl(release.repository)
+  if (url === null) return
+  const latest = await latestVersion(
+    {
+      now: () => $.clock.now(),
+      get: () => $.store.get(LATEST_RELEASE_KEY),
+      set: value => $.store.set(LATEST_RELEASE_KEY, value),
+      fetch: (target, init) => $.http.fetch(target, init),
+    },
+    url,
+  )
+  release = { ...release, latest }
 }
 
 /** A file's text, or null when it is missing or too big to read. */
@@ -306,6 +324,11 @@ export const register: Register = (on, options) => {
     locale = resolveLocale(language, localeVariables)
     m = messagesFor(locale)
     release = await readRelease($)
+    // A later published release turns the header's date into Update Required: asked now and every few hours.
+    void followLatestRelease($).catch((error: unknown) => debugLog($, error))
+    $.clock.every(RELEASE_CHECK_MS, () => {
+      void followLatestRelease($).catch((error: unknown) => debugLog($, error))
+    })
     $.ui.status(undefined)
     // Readings no lookup produced (a figure copied from another login, a message an older build kept) go.
     await $.store.set(USAGE_KEY, lookedUpOnly(await $.store.get(USAGE_KEY)))

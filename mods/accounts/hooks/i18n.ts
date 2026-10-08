@@ -62,7 +62,7 @@ const en = {
   orcaWillRevert: (to: string, active: string) =>
     `The login changed to ${to}, which Orca holds no login for; Orca puts ${active} back the next time it writes the login. Add ${to} in Orca to keep it.`,
   orcaAppliedPending: (email: string) => `${email}, chosen while Orca was not running, is now selected in Orca too.`,
-  heldByOrca: 'Orca keeps this login, so its token is not refreshed here; the figures are looked up again once the account is in use.',
+  heldByOrca: 'Orca keeps this login where sc-accounts cannot refresh it, so the figures are looked up again once the account is in use.',
   removeTitle: (email: string) => `Remove ${email}?`,
   removeHint: 'Its saved login is deleted from this machine. Using the account again takes a new /login.',
   removeConfirm: 'Remove',
@@ -166,6 +166,7 @@ const en = {
   bandHidden: 'The status band above the prompt is hidden.',
   bandUsage: 'Usage: /sc:accounts band on|off',
   release: (version: string, date?: string) => (date ? `v${version} (${date})` : `v${version}`),
+  updateRequired: 'Update Required',
 }
 
 export type Messages = typeof en
@@ -229,7 +230,7 @@ const ko: Messages = {
   orcaWillRevert: (to, active) =>
     `로그인이 ${to}(으)로 바뀌었지만 Orca에는 이 계정의 로그인이 없어서, Orca가 다음에 로그인을 기록할 때 ${active} 계정으로 되돌립니다. 이 계정을 계속 쓰려면 Orca에 추가해 주세요.`,
   orcaAppliedPending: email => `Orca가 실행되지 않던 동안 고른 ${email} 계정을 Orca에서도 선택했습니다.`,
-  heldByOrca: 'Orca가 보관하는 로그인이라 여기서는 토큰을 갱신하지 않습니다. 이 계정을 다시 사용하면 수치를 다시 조회합니다.',
+  heldByOrca: 'Orca가 이 로그인을 sc-accounts가 갱신할 수 없는 곳에 보관해서, 이 계정을 다시 사용하면 수치를 다시 조회합니다.',
   removeTitle: email => `${email} 계정을 제거할까요?`,
   removeHint: '이 기기에 저장한 로그인을 삭제합니다. 이 계정을 다시 쓰려면 /login으로 다시 로그인해야 합니다.',
   removeConfirm: '제거',
@@ -332,6 +333,7 @@ const ko: Messages = {
   bandHidden: '입력란 위 상태 표시를 껐습니다.',
   bandUsage: '사용법: /sc:accounts band on|off',
   release: (version, date) => (date ? `v${version} (${date})` : `v${version}`),
+  updateRequired: '업데이트 필요',
 }
 
 export function messagesFor(locale: Locale): Messages {

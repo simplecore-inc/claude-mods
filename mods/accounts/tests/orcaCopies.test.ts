@@ -26,7 +26,7 @@ const login = (token: string, refresh: string, expiresAt: number, extra: Record<
  * the keychain as `security` answers it, and the token endpoint answering
  * with `refreshed`, or with the status a test sets.
  */
-function world(copies: (now: number) => { saved: string; orca: string | null }, refusal?: number) {
+function world(copies: (now: number) => { saved: string; orca: string | null }, refusal?: number, refusedTokens: string[] = []) {
   const machine = fakeMachine()
   const { saved: junSaved, orca: junOrca } = copies(machine.now())
   const keychain: Record<string, string> = { 'account-switch|u1': login('a-mina', 'r-mina', machine.now() + 8 * HOUR), 'account-switch|u2': junSaved }
@@ -48,9 +48,11 @@ function world(copies: (now: number) => { saved: string; orca: string | null }, 
   })
   machine.setFetch(async (url, init) => {
     if (!url.endsWith('/v1/oauth/token')) throw new Error(`unexpected request: ${url}`)
-    refreshes.push(String(init?.body ?? ''))
-    if (refusal) return response(refusal, { error: 'invalid_grant' })
-    return response(200, { access_token: 'a-jun-2', refresh_token: 'r-jun-2', expires_in: 28_800 })
+    const body = String(init?.body ?? '')
+    refreshes.push(body)
+    const used = (JSON.parse(body) as { refresh_token?: string }).refresh_token ?? ''
+    if (refusal || refusedTokens.includes(used)) return response(refusal ?? 400, { error: 'invalid_grant' })
+    return response(200, { access_token: `${used}-a2`, refresh_token: `${used}-r2`, expires_in: 28_800 })
   })
   machine.store['oauthAccount:u1'] = MINA
   machine.store['oauthAccount:u2'] = JUN
@@ -74,9 +76,9 @@ test('a copy Orca keeps that expires within the hour is refreshed, and the new g
   const one = world(now => ({ saved: login('a-jun', 'r-jun', now + ORCA_COPY_MARGIN_MS / 2), orca: login('a-jun', 'r-jun', now + ORCA_COPY_MARGIN_MS / 2, { subscriptionType: 'max' }) }))
   await keepOrcaCopiesFresh(one.ctx, ORCA)
   expect(one.refreshes.length).toBe(1)
-  expect(one.oauth('account-switch|u2')).toMatchObject({ accessToken: 'a-jun-2', refreshToken: 'r-jun-2' })
+  expect(one.oauth('account-switch|u2')).toMatchObject({ accessToken: 'r-jun-a2', refreshToken: 'r-jun-r2' })
   // Orca's copy keeps what else it holds.
-  expect(one.oauth(`${ORCA_ITEM}|o-jun`)).toMatchObject({ accessToken: 'a-jun-2', refreshToken: 'r-jun-2', subscriptionType: 'max' })
+  expect(one.oauth(`${ORCA_ITEM}|o-jun`)).toMatchObject({ accessToken: 'r-jun-a2', refreshToken: 'r-jun-r2', subscriptionType: 'max' })
   // Fresh now: the next check refreshes nothing.
   await keepOrcaCopiesFresh(one.ctx, ORCA)
   expect(one.refreshes.length).toBe(1)
@@ -96,14 +98,20 @@ test('the live login and the one Orca has selected are never refreshed here, nor
   expect(later.refreshes).toEqual([])
 })
 
-test('a copy Orca holds of another grant is left alone, and so is this mod\'s', async () => {
-  const one = world(now => ({ saved: login('a-jun', 'r-jun', now + 60_000), orca: login('a-jun-orca', 'r-jun-orca', now + 60_000) }))
-  const ours = one.keychain['account-switch|u2']
-  const orcas = one.keychain[`${ORCA_ITEM}|o-jun`]
+test('copies of two grants: the later one is refreshed and written to both, the other tried when it is refused', async () => {
+  // This mod's copy was rotated here, Orca's left behind on the spent token before it.
+  const one = world(now => ({ saved: login('a-jun', 'r-jun-new', now + 60_000), orca: login('a-jun-old', 'r-jun-old', now - 2 * HOUR) }))
   await keepOrcaCopiesFresh(one.ctx, ORCA)
-  expect(one.refreshes).toEqual([])
-  expect(one.keychain[`${ORCA_ITEM}|o-jun`]).toBe(orcas)
-  expect(one.keychain['account-switch|u2']).toBe(ours)
+  expect(one.refreshes.map(body => (JSON.parse(body) as { refresh_token: string }).refresh_token)).toEqual(['r-jun-new'])
+  expect(one.oauth('account-switch|u2')).toMatchObject({ refreshToken: 'r-jun-new-r2' })
+  expect(one.oauth(`${ORCA_ITEM}|o-jun`)).toMatchObject({ refreshToken: 'r-jun-new-r2' })
+  // Two logins made apart, the later one revoked: Orca's, still alive, is refreshed and written to both.
+  const two = world(now => ({ saved: login('a-jun', 'r-jun-mine', now + 60_000), orca: login('a-jun-orca', 'r-jun-orca', now - HOUR) }), undefined, ['r-jun-mine'])
+  await keepOrcaCopiesFresh(two.ctx, ORCA)
+  expect(two.refreshes.map(body => (JSON.parse(body) as { refresh_token: string }).refresh_token)).toEqual(['r-jun-mine', 'r-jun-orca'])
+  expect(two.oauth('account-switch|u2')).toMatchObject({ refreshToken: 'r-jun-orca-r2' })
+  expect(two.oauth(`${ORCA_ITEM}|o-jun`)).toMatchObject({ refreshToken: 'r-jun-orca-r2' })
+  expect(two.toasts).toEqual([])
 })
 
 test('a copy the server refuses is said once and not asked about again until it changes', async () => {

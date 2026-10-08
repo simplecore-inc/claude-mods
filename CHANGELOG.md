@@ -2,6 +2,20 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.6.4 (2026-10-08)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- A login Orca keeps is refreshed here too, on a lookup as in the background, and the new login is written to Orca's copy and to this mod's. Copies of two different grants are no longer left alone: the one that expires later is refreshed first, the other when the server refuses it, and the one that refreshes is written to both.
+- Off macOS, Orca's copy in the account's folder under `claude-accounts` (or under `~/.local/share/orca` inside WSL) is kept fresh the same way, where Orca's marker in the folder names the account.
+
+### Every pane
+
+- The release in the pane header reads `Update Required` in place of its date, in the warning colour, once a later release is published on GitHub. The latest release is asked for at most every six hours and shared by every session.
+
 ## 0.6.3 (2026-10-08)
 
 > [!IMPORTANT]

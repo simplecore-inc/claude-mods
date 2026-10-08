@@ -353,6 +353,29 @@ test('the grant Claude Code holds is never refreshed, even while the config name
   expect(world.refreshes).toEqual([])
 })
 
+test('a lookup refreshes a login Orca keeps a copy of, and writes the new grant to Orca\'s copy too', async ($, on) => {
+  const world = machine(on, { accounts: [ORCA_MINA, ORCA_JUN], activeId: 'o-mina' })
+  world.store.orca = { claude: { accounts: [ORCA_MINA, ORCA_JUN].map(({ id, email, organizationUuid }) => ({ id, email, organizationUuid })), activeId: 'o-mina' }, seenAt: NOW, checkedAt: NOW }
+  // Jun's token has expired, here and in Orca's copy of the same grant.
+  world.keychain['account-switch|u2'] = login('a-jun', NOW - HOUR)
+  world.keychain['Orca Claude Code Managed Credentials|o-jun'] = login('a-jun', NOW - HOUR)
+  await run($, 'refresh')
+  expect(world.refreshes.length).toBe(1)
+  const token = (key: string) => (JSON.parse(world.keychain[key] ?? '{}') as { claudeAiOauth: { accessToken: string; refreshToken: string } }).claudeAiOauth
+  expect(token('account-switch|u2')).toMatchObject({ accessToken: 'a-jun-refreshed', refreshToken: 'r-jun-refreshed' })
+  expect(token('Orca Claude Code Managed Credentials|o-jun')).toMatchObject({ accessToken: 'a-jun-refreshed', refreshToken: 'r-jun-refreshed' })
+  expect((world.state.usage as Record<string, { isHeld?: boolean }>).u2?.isHeld).toBeUndefined()
+})
+
+test('a lookup leaves alone a login Orca keeps where no copy of it can be read, and says so on its card', async ($, on) => {
+  const world = machine(on, { accounts: [ORCA_MINA, ORCA_JUN], activeId: 'o-mina' })
+  world.store.orca = { claude: { accounts: [ORCA_MINA, ORCA_JUN].map(({ id, email, organizationUuid }) => ({ id, email, organizationUuid })), activeId: 'o-mina' }, seenAt: NOW, checkedAt: NOW }
+  world.keychain['account-switch|u2'] = login('a-jun', NOW - HOUR)
+  await run($, 'refresh')
+  expect(world.refreshes).toEqual([])
+  expect((world.state.usage as Record<string, { isHeld?: boolean }>).u2?.isHeld).toBe(true)
+})
+
 test('removing by the command takes the account named whole', async ($, on) => {
   const world = machine(on, 'absent')
   expect(await run($, 'remove 2')).toStartWith('Removing deletes the saved login, so name the account whole')

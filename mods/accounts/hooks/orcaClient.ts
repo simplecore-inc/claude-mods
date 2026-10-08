@@ -1,7 +1,9 @@
 import { homeDirectory, platformOf } from './credentials'
+import type { OrcaCopyPlace } from './credentials'
 import type { Messages } from './i18n'
 import type { Io } from './io'
 import { message } from './io'
+import { isAccountId } from './keychain'
 import {
   ORCA_CLIENT_SCRIPT,
   ORCA_EXIT,
@@ -83,6 +85,34 @@ async function orcaRequest(io: Io, m: Messages, method: string, params: unknown,
   if (!frame) return { kind: 'unreachable', reason: m.orcaNoAnswer }
 
   return frame.ok ? { kind: 'ok', result: frame.result } : { kind: 'unreachable', reason: frame.reason }
+}
+
+/** The marker Orca writes into each account folder it owns, holding the account's id. */
+const ORCA_OWNED_MARKER = '.orca-managed-claude-auth'
+
+/**
+ * Where Orca keeps its copy of one account's login: the keychain on macOS;
+ * elsewhere the account's folder under `claude-accounts` in Orca's data folder,
+ * or under `~/.local/share/orca` for an account Orca keeps in WSL, seen from
+ * inside WSL. A folder counts only where Orca's marker in it names the account,
+ * as Orca itself checks before it uses one. Null when no copy can be reached.
+ */
+export async function orcaCopyPlace(io: Io, orcaId: string): Promise<OrcaCopyPlace | null> {
+  if (!isAccountId(orcaId)) return null
+  const platform = await platformOf(io)
+  if (platform.backend === 'keychain') return { kind: 'keychain', orcaId }
+  const data = await orcaDirectory(io)
+  const roots = [data === null ? null : `${data}/claude-accounts`, platform.isWindows ? null : `${await homeDirectory(io)}/.local/share/orca/claude-accounts`]
+  for (const root of roots) {
+    if (root === null) continue
+    const folder = `${root}/${orcaId}/auth`
+    const marker = `${folder}/${ORCA_OWNED_MARKER}`
+    const path = `${folder}/.credentials.json`
+    if (!(await io.exists(marker)) || !(await io.exists(path))) continue
+    if ((await io.read(marker)).trim() === orcaId) return { kind: 'file', path }
+  }
+
+  return null
 }
 
 /** Asks Orca for its Claude logins, and keeps what it says for every session. */

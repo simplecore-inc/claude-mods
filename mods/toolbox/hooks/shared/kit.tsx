@@ -71,6 +71,8 @@ export function paneTitle(mod: string): string {
 export type HeaderInfo = {
   brand: string
   release: string | undefined
+  /** A later release is published: the release is drawn in the warning colour, not dim. */
+  isReleaseOutdated?: boolean
   isUnderTabs: boolean
   columns?: number
   exit?: { label: string; onPress: () => void }
@@ -80,7 +82,8 @@ export type HeaderInfo = {
 /**
  * A pane's first row: its name at the left and the way out at the right, a
  * filled button that is the first thing scrolled into view however short the
- * terminal is. The release sits before it while the row has room for it.
+ * terminal is. The release sits before it while the row has room for it,
+ * in the warning colour once a later release is published.
  */
 export function Header(ui: ElementTable, header: HeaderInfo) {
   const { Box, Button, Text } = ui
@@ -97,7 +100,7 @@ export function Header(ui: ElementTable, header: HeaderInfo) {
         {brand}
       </Text>
       <Box gap={2} flexShrink={0}>
-        {isReleaseShown && <Text dimColor>{release}</Text>}
+        {isReleaseShown && (header.isReleaseOutdated ? <Text color={theme.warn}>{release}</Text> : <Text dimColor>{release}</Text>)}
         {exit && (
           <Box key="header-exit-ground" paddingX={1} flexShrink={0} backgroundColor={theme.tile} hover={{ backgroundColor: theme.tileHover }}>
             <Button key="close" label={exit.label} plain role="dismiss" onPress={exit.onPress} />

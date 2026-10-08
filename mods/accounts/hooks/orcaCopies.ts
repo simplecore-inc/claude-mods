@@ -6,6 +6,7 @@ import type { OauthAccount } from './credentials'
 import { message } from './io'
 import { orcaAccountFor } from './orca'
 import type { OrcaClaude } from './orca'
+import { orcaCopyPlace } from './orcaClient'
 
 /**
  * Keeps Orca's copies of the saved logins from expiring. Orca writes the copy
@@ -39,8 +40,10 @@ export async function keepOrcaCopiesFresh(ctx: AccountsContext, claude: OrcaClau
     if (!kept || kept.id === claude.activeId) continue
     const saved = await readVault(io, account.uuid).catch(() => null)
     if (saved === null || failed[account.uuid] === saved.claudeAiOauth.expiresAt) continue
+    const place = await orcaCopyPlace(io, kept.id).catch(() => null)
+    if (place === null) continue
     try {
-      if ((await refreshOrcaCopy(io, account.uuid, kept.id, ORCA_COPY_MARGIN_MS, m.refreshNoAnswer(REFRESH_TIMEOUT_MS / 1000))) === 'refreshed') {
+      if ((await refreshOrcaCopy(io, account.uuid, place, ORCA_COPY_MARGIN_MS, m.refreshNoAnswer(REFRESH_TIMEOUT_MS / 1000))) === 'refreshed') {
         io.log(`refreshed the login Orca keeps for ${account.email}`)
       }
     } catch (error) {
