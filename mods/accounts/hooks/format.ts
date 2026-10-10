@@ -48,3 +48,15 @@ export function isSameReset(a: string | undefined, b: string | undefined): boole
   return Math.abs(Date.parse(a) - Date.parse(b)) <= 2 * 60 * 1000
 }
 
+/** A number with its thousands grouped and at most two decimals, none when whole: `62500` as `62,500`, `0.75` as `0.75`. */
+export function groupDecimal(n: number): string {
+  const [whole = '0', fraction = ''] = n.toFixed(2).split('.')
+  const kept = fraction.replace(/0+$/, '')
+
+  return `${groupDigits(Number(whole))}${kept === '' ? '' : `.${kept}`}`
+}
+
+/** A whole number with its thousands grouped by commas: `141551` as `141,551`. */
+export function groupDigits(n: number): string {
+  return String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}

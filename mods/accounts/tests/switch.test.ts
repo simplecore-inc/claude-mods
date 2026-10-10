@@ -209,6 +209,20 @@ test('with no Orca on the machine, a switch writes the login here and never asks
   expect(world.changes().at(-1)).toMatchObject({ kind: 'switch', orca: 'direct', to: 'jun@example.org' })
 })
 
+test('a switch changes the account and keeps the MCP connectors\' and plugins\' authorizations the machine holds', async ($, on) => {
+  const world = machine(on, 'absent')
+  const withShared = (text: string, shared: Record<string, unknown>) => JSON.stringify({ ...(JSON.parse(text) as object), ...shared })
+  world.keychain[LIVE_ITEM] = withShared(world.keychain[LIVE_ITEM] ?? '{}', { mcpOAuth: { github: 'connected-today' }, pluginSecrets: { lint: 'k' } })
+  // Jun's login was saved before the connector was authorized, with an old one of its own.
+  world.keychain['account-switch|u2'] = withShared(world.keychain['account-switch|u2'] ?? '{}', { mcpOAuth: { github: 'stale' }, mcpXaaIdp: { old: true } })
+  expect(await run($, 'use 2')).toBe('Switched to jun@example.org. Running sessions use it from their next request.')
+  const live = JSON.parse(world.keychain[LIVE_ITEM] ?? '{}') as Record<string, unknown> & { claudeAiOauth: { accessToken: string } }
+  expect(live.claudeAiOauth.accessToken).toBe('a-jun')
+  expect(live.mcpOAuth).toEqual({ github: 'connected-today' })
+  expect(live.pluginSecrets).toEqual({ lint: 'k' })
+  expect(live.mcpXaaIdp).toBeUndefined()
+})
+
 test('with Orca running and writing another login, a switch selects the account in Orca too, so Orca keeps it', async ($, on) => {
   const world = machine(on, { accounts: [ORCA_MINA, ORCA_JUN], activeId: 'o-mina' })
   expect(await run($, 'use 2')).toBe('Switched to jun@example.org, in Orca too. Running sessions use it from their next request.')

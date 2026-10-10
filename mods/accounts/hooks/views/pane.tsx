@@ -1,6 +1,6 @@
 import type { ElementTable } from 'claude-code'
 
-import type { AccountsTabKey, AccountView, StorageView, UsageSummary, UsageView } from '../../types'
+import type { AccountView, AccountsTabKey, CodexAccountView, StorageView, UsageSummary, UsageView } from '../../types'
 import type { Locale, Messages } from '../i18n'
 import { ChoiceDialog, Dialog, Header, InputDialog, TabBar, Tiles } from '../shared/kit'
 import type { DialogLine, HeaderInfo } from '../shared/kit'
@@ -44,6 +44,8 @@ export type PaneModel = {
   accounts: AccountView[]
   liveUuid: string | null
   readings: Record<string, UsageView>
+  /** The Codex account this session's Codex uses; null where the Codex CLI does not run. */
+  codex: CodexAccountView | null
   isGuideShown: boolean
   isRefreshing: boolean
   now: number
@@ -207,6 +209,7 @@ export function AccountsPane(ui: ElementTable, model: PaneModel, actions: PaneAc
           list: model.accounts,
           liveUuid: model.liveUuid,
           readings: model.readings,
+          codex: model.codex,
           isGuideShown: model.isGuideShown,
           now: model.now,
           locale: model.locale,

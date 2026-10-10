@@ -4,6 +4,8 @@ import type { AccountsContext } from './accounts'
 import { lookedUpOnly } from './anthropic'
 import { askCleanup, askedCleanup, cleanUp, measureStorage } from './cleanup'
 import type { CleanupContext } from './cleanup'
+import { refreshCodexAccount } from './codexAccount'
+import type { CodexAccountContext } from './codexAccount'
 import { countUsage, refreshUsageSummary } from './count'
 import type { CountContext } from './count'
 import { draftConfig, openWebhook, resetFeed, saveWebhook, templatePath, testWebhook, upgradeTemplate, urlMessage, webhookPreview } from './feed'
@@ -43,6 +45,7 @@ export type PaneContext = {
   cleanup: CleanupContext
   feed: FeedContext
   status: StatusContext
+  codex: CodexAccountContext
   cells: {
     dialog: Cell<PaneDialog>
     focused: Cell<string | null>
@@ -102,7 +105,9 @@ export async function isPaneShown(ctx: PaneContext): Promise<boolean> {
  * nothing else hands it the keys.
  */
 export async function openPane(ctx: PaneContext, focus = true, rows?: number): Promise<void> {
-  const wanted = rows ?? ((await ctx.cells.tab.get()) !== 'accounts' ? USAGE_ROWS : Math.max(1, (await ctx.accounts.accounts.get()).length) * 5 + ACCOUNTS_CHROME_ROWS)
+  // The Codex card, where there is one, takes the rows of one more account.
+  const cards = Math.max(1, (await ctx.accounts.accounts.get()).length) + ((await ctx.codex.cell.get()) ? 1 : 0)
+  const wanted = rows ?? ((await ctx.cells.tab.get()) !== 'accounts' ? USAGE_ROWS : cards * 5 + ACCOUNTS_CHROME_ROWS)
   await ctx.ui.open(wanted, focus)
   if (!(await ctx.cells.paneOpen.get())) await ctx.cells.paneOpen.set(true)
 }
@@ -175,6 +180,9 @@ export async function refresh(ctx: PaneContext, isAsked: boolean): Promise<void>
   } catch (error) {
     ctx.ui.toast(message(error))
   }
+  // Refresh asks Codex too, without waiting: its lookup may take longer than a command may.
+  // Otherwise the open pane's tick keeps its card current.
+  if (isAsked) void refreshCodexAccount(ctx.codex, true).catch((error: unknown) => ctx.accounts.io.log(message(error)))
 }
 
 /** The accounts and their limits as `/sc:accounts list` prints them. */
@@ -184,16 +192,23 @@ export async function listText(ctx: PaneContext): Promise<string> {
   const liveUuid = await ctx.accounts.live.get()
   const readings = await ctx.accounts.usage.get()
   const now = await ctx.accounts.io.now()
-  if (list.length === 0) return m.noAccounts
+  const codex = await ctx.codex.cell.get()
+  const login = codex?.login
+  const codexWho = login?.kind === 'chatgpt' ? (login.email ?? '') : login?.kind === 'apiKey' ? m.codexApiKey : login?.kind === 'none' ? m.codexSignedOut : ''
+  const codexDetail = codex?.reading?.error ?? describeLimits(codex?.reading?.limits ?? [], now, m.now, ctx.view.locale())
+  // The Codex line, where the Codex CLI runs and a lookup has said something.
+  const codexLine = codex && (codexWho !== '' || codexDetail !== '') ? [`Codex  ${[codexWho, codexDetail].filter(Boolean).join('  ')}`] : []
+  if (list.length === 0) return [m.noAccounts, ...codexLine].join('\n')
 
-  return list
-    .map((one, index) => {
+  return [
+    ...list.map((one, index) => {
       const reading = readings[one.uuid]
       const detail = reading?.error ?? describeLimits(reading?.limits ?? [], now, m.now, ctx.view.locale())
 
       return `${index + 1}. ${one.email}${one.uuid === liveUuid ? m.activeTag : ''}${reading?.isStale ? ` ${STALE_MARK}` : ''}  ${detail}`
-    })
-    .join('\n')
+    }),
+    ...codexLine,
+  ].join('\n')
 }
 
 /** The session's status, model, directory and cost: what the webhook's template is filled with. */
@@ -257,6 +272,7 @@ export async function paneModel(ctx: PaneContext, bodyColumns: number, hasField:
     accounts: await ctx.accounts.accounts.get(),
     liveUuid: await ctx.accounts.live.get(),
     readings: await ctx.accounts.usage.get(),
+    codex: await ctx.codex.cell.get(),
     isGuideShown: await cells.isGuideOpen.get(),
     isRefreshing: await ctx.accounts.isRefreshing.get(),
     // Reading the tick subscribes the pane to it, so the ages move on while it is open.

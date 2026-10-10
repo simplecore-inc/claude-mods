@@ -2,7 +2,7 @@ import type { UsageView } from '../types'
 import { USAGE_KEY, changeIndex, exclusive, noteInstalled, oauthAccountKey, organizationOf, recordChange, syncLive } from './accounts'
 import type { AccountsContext } from './accounts'
 import { lookedUpOnly } from './anthropic'
-import { REFRESH_TIMEOUT_MS, deleteVault, ensureFresh, liveOauthAccount, readLiveCredential, readVault, writeLiveFile, writeLiveKeychain, writeLiveOauthAccount } from './credentials'
+import { REFRESH_TIMEOUT_MS, deleteVault, ensureFresh, liveOauthAccount, readLiveCredential, readVault, withLiveSharedFields, writeLiveFile, writeLiveKeychain, writeLiveOauthAccount } from './credentials'
 import type { OauthAccount } from './credentials'
 import type { Io } from './io'
 import { message } from './io'
@@ -56,11 +56,13 @@ async function installLogin(ctx: AccountsContext, uuid: string, email: string): 
   if (credential === null || !account) throw new Error(`${email}: ${ctx.messages().noStoredLogin}`)
   const before = { credential: await readLiveCredential(io), account: await liveOauthAccount(io).catch(() => null) }
   const fresh = await ensureFresh(io, uuid, credential, before.credential, ctx.messages().refreshNoAnswer(REFRESH_TIMEOUT_MS / 1000))
+  // The connectors' and plugins' authorizations stay as the machine has them; only the account changes.
+  const installed = withLiveSharedFields(fresh, before.credential)
   try {
-    await writeLiveKeychain(io, fresh)
+    await writeLiveKeychain(io, installed)
     await writeLiveOauthAccount(io, account)
     // Last, so a session that notices the change finds everything already in place.
-    await writeLiveFile(io, fresh)
+    await writeLiveFile(io, installed)
   } catch (error) {
     await putBack(io, before).catch((putBackError: unknown) => io.log(`a failed switch could not put the login back: ${message(putBackError)}`))
     throw error

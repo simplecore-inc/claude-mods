@@ -4,6 +4,18 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.7.0 (2026-10-10)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Each Claude subagent's model and effort follow its task in Claude Code's agent list, such as `Review auth · Opus 5.5 (high)`: the parent's for `general-purpose`, a fork and `model: inherit`, an agent file's `model` and `effort`, or the Agent tool's `model` option. Built-in agents whose model the engine chooses, and plugins' agents, are left as they were. Adapted from the `agent-models` plugin of alex2481kobe/claude-mods (Apache License 2.0).
+- Where the Codex CLI is installed (macOS and Linux), Claude can start OpenAI Codex with the Agent tool: `sc-accounts:codex-read` (read-only), `sc-accounts:codex-write` (workspace-write) and `sc-accounts:codex-run` (your Codex config, changed by flags in the prompt). sc-accounts drives `codex app-server` in the agent's place: its steps show in the agent's view, its report comes back to Claude, a message resumes the same Codex session, an approval Codex asks for is handed back and answered by the next message, and `/codex-model`, `/codex-effort`, `/codex-sandbox`, `/codex-approvals`, `/codex-status` and `/codex-help` work in the agent's view. Adapted from the `codex` plugin of alex2481kobe/claude-mods (Apache License 2.0).
+- The Accounts tab shows a Codex card under the Claude accounts: the Codex login the session's Codex uses (the one Orca selected, where Orca sets `CODEX_HOME`), its windows on the same gauges and its credits. It is looked up while the pane is open, at most every five minutes, and at once on **Refresh**; `/sc:accounts list` prints it as a last line.
+- A switch keeps the MCP connectors' and plugins' authorizations (`mcpOAuth` and the rest) as the live login holds them, so a connector authorized after an account was saved stays authorized. Orca 1.4.223 does the same.
+
 ## 0.6.4 (2026-10-08)
 
 > [!IMPORTANT]

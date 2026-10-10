@@ -1,8 +1,18 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { AgentSpawnInput, EngineInterface, Register } from 'claude-code'
 
 import { USAGE_KEY, syncLive, tickOrca } from './accounts'
 import type { AccountsContext } from './accounts'
+import { agentDefinitionNamed, agentLabel } from './agentModels'
+import { TYPES as CODEX_TYPES, codexInstalled, specsOf as codexAgentSpecs } from './codex/agents'
+import { HINT as CODEX_HINT, commandSpecs as codexCommandSpecs, isCommand as isCodexCommand, isOwnCommand as isOwnCodexCommand } from './codex/commands'
+import { flagsOf as codexFlagsOf } from './codex/flags'
+import { codexConfig, codexModels, labelOf as codexLabel } from './codex/model'
+import { closeHeld as closeHeldCodex, command as codexCommand, step as codexStep, steer as steerCodex } from './codex/step'
+import type { CodexContext } from './codex/step'
+import { refreshCodexAccount } from './codexAccount'
+import type { CodexAccountContext } from './codexAccount'
+import { openView as openCodexView, replyIn as codexReplyIn, setOpenView as setOpenCodexView } from './codex/view'
 import { lookedUpOnly } from './anthropic'
 import type { CleanupContext } from './cleanup'
 import type { CountContext } from './count'
@@ -25,6 +35,7 @@ import { isBesideOtherPanes } from './shared/panes'
 import { editedPath, lineChanges } from './status'
 import type { EffortSettings } from './status'
 import { StatusBand, toolboxCell } from './views/band'
+import { CodexReplyBand } from './views/codexReply'
 import { AccountsPane } from './views/pane'
 
 const accounts = atom({ plugin: 'sc-accounts', key: 'accounts' } as const, [])
@@ -47,6 +58,13 @@ const usageScan = atom({ plugin: 'sc-accounts', key: 'usageScan' } as const, nul
 const usageError = atom({ plugin: 'sc-accounts', key: 'usageError' } as const, null)
 const storage = atom({ plugin: 'sc-accounts', key: 'storage' } as const, null)
 const cleanupDays = atom({ plugin: 'sc-accounts', key: 'cleanupDays' } as const, 30)
+/** What each codex agent has passed to Codex, was spawned with, set by its commands, and last ran with. */
+const codexSent = atom({ plugin: 'sc-accounts', key: 'codexSent' } as const, {})
+const codexOpenings = atom({ plugin: 'sc-accounts', key: 'codexOpenings' } as const, {})
+const codexOptions = atom({ plugin: 'sc-accounts', key: 'codexOptions' } as const, {})
+const codexRuns = atom({ plugin: 'sc-accounts', key: 'codexRuns' } as const, {})
+/** The Codex account this session's Codex uses, for the Accounts tab's Codex card. */
+const codexAccount = atom({ plugin: 'sc-accounts', key: 'codexAccount' } as const, null)
 /** The toolbox's counts for its band cell; all zero when the toolbox is not installed. */
 const toolboxSummary = atom({ plugin: 'sc-toolbox', key: 'summary' } as const, { running: 0, waiting: 0, failed: 0 })
 
@@ -83,6 +101,8 @@ let sessionId = ''
 let homePath = ''
 let hostname: string | null = null
 let engineVersion: string | null = null
+/** The effort of each loop's latest request, by agent id; '' is the main loop. */
+const requestEfforts = new Map<string, string>()
 
 function isAccountCell(element: string): boolean {
   return element === BAND_ACCOUNT || element.startsWith(`${BAND_ACCOUNT}-`)
@@ -115,6 +135,8 @@ function variable($: EngineInterface, name: EnvName): Promise<string | undefined
       return $.env.get('XDG_CONFIG_HOME')
     case 'APPDATA':
       return $.env.get('APPDATA')
+    case 'CODEX_HOME':
+      return $.env.get('CODEX_HOME')
   }
 }
 
@@ -146,6 +168,63 @@ function machine($: EngineInterface): Io {
       keys: () => $.store.keys(),
     },
     log: text => $.ui.log(`account-switch: ${text}`, { to: 'debug' }),
+  }
+}
+
+/** Each agent's type by id, as the engine listed it: an agent's type never changes, so the band asks once per agent. */
+const agentTypes = new Map<string, string>()
+
+/** When an agent a view showed was last missing from the engine's list, by id. */
+const missedAgents = new Map<string, number>()
+/** How long the band takes a missing agent (a finished one the engine dropped) as missing before asking again. */
+const AGENT_MISS_MS = 10_000
+
+/**
+ * The type of the agent whose view the band draws: asked once per agent, and
+ * a missing one at most every `AGENT_MISS_MS`. A list that cannot be read
+ * leaves the band as it is, with no codex reply.
+ */
+async function viewedAgentType($: EngineInterface, id: string): Promise<string | undefined> {
+  const known = agentTypes.get(id)
+  if (known !== undefined) return known
+  const missedAt = missedAgents.get(id)
+  if (missedAt !== undefined && (await $.clock.now()) - missedAt < AGENT_MISS_MS) return undefined
+  const type = await codexContext($)
+    .agentType(id)
+    .catch(() => undefined)
+  if (type === undefined) missedAgents.set(id, await $.clock.now())
+  else missedAgents.delete(id)
+
+  return type
+}
+
+function codexContext($: EngineInterface): CodexContext {
+  return {
+    agentType: async id => {
+      const known = agentTypes.get(id)
+      if (known !== undefined) return known
+      const type = (await $.agent.list()).find(agent => agent.id === id)?.type
+      if (type !== undefined) agentTypes.set(id, type)
+
+      return type
+    },
+    messages: async agentId => {
+      const api = await $.session.messages({ as: 'api', agentId })
+      if ('deny' in api) throw new Error(api.deny)
+
+      return api
+    },
+    cwd: () => $.session.cwd(),
+    host: { spawn: request => $.process.spawn(request), write: (path, text) => $.fs.write(path, text), stat: path => $.fs.stat(path) },
+    read: path => $.fs.read(path),
+    note: async (agentId, text) => {
+      await $.session.append({ agentId, message: { type: 'system', content: [{ type: 'text', text }] } })
+    },
+    invalidate: () => $.ui.invalidate('ui.render'),
+    sent: { get: () => read($, codexSent), update: async change => void (await update($, codexSent, change)) },
+    openings: { get: () => read($, codexOpenings), update: async change => void (await update($, codexOpenings, change)) },
+    options: { get: () => read($, codexOptions), update: async change => void (await update($, codexOptions, change)) },
+    runs: { get: () => read($, codexRuns), update: async change => void (await update($, codexRuns, change)) },
   }
 }
 
@@ -222,6 +301,16 @@ function statusContext($: EngineInterface): StatusContext {
   }
 }
 
+function codexAccountContext($: EngineInterface): CodexAccountContext {
+  return {
+    io: machine($),
+    host: { spawn: request => $.process.spawn(request), write: (path, text) => $.fs.write(path, text), stat: path => $.fs.stat(path) },
+    cwd: () => $.session.cwd(),
+    cell: { get: () => read($, codexAccount), set: async value => void (await update($, codexAccount, () => value)) },
+    messages: () => m,
+  }
+}
+
 function paneContext($: EngineInterface): PaneContext {
   const cell = <T,>(get: () => Promise<T>, set: (value: T) => Promise<unknown>): Cell<T> => ({ get, set: async value => void (await set(value)) })
 
@@ -231,6 +320,7 @@ function paneContext($: EngineInterface): PaneContext {
     cleanup: cleanupContext($),
     feed: feedContext($),
     status: statusContext($),
+    codex: codexAccountContext($),
     cells: {
       dialog: cell(() => read($, dialog), value => update($, dialog, () => value)),
       focused: cell(() => read($, focused), value => update($, focused, () => value)),
@@ -312,6 +402,87 @@ async function readSmallFile($: EngineInterface, path: string): Promise<string |
   return size > MAX_COUNTED_FILE ? null : $.fs.read(path)
 }
 
+/** The label for a spawn, from the agent file its type names where it is not built in or a fork. */
+async function spawnLabel($: EngineInterface, e: AgentSpawnInput): Promise<string | undefined> {
+  if (e.subagentType.includes(':')) return undefined
+  const isBuiltIn = e.provider.plugin === 'engine'
+  const definition = e.fork || isBuiltIn ? undefined : await agentDefinitionNamed(machine($), await $.session.root(), e.subagentType, e.provider.plugin)
+  const parentEffort = requestEfforts.get(e.parentAgentId ?? '')
+
+  return agentLabel({ type: e.subagentType, model: e.model, fork: e.fork, isBuiltIn, parentModel: e.parentModel, parentEffort }, definition)
+}
+
+/** The accounts' part of a session's start: the language, the release, the status and the timers. */
+async function startAccounts($: EngineInterface): Promise<void> {
+  const { language } = await $.settings.read()
+  const localeVariables = [await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG')]
+  locale = resolveLocale(language, localeVariables)
+  m = messagesFor(locale)
+  release = await readRelease($)
+  // A later published release turns the header's date into Update Required: asked now and every few hours.
+  void followLatestRelease($).catch((error: unknown) => debugLog($, error))
+  $.clock.every(RELEASE_CHECK_MS, () => {
+    void followLatestRelease($).catch((error: unknown) => debugLog($, error))
+  })
+  $.ui.status(undefined)
+  // Readings no lookup produced (a figure copied from another login, a message an older build kept) go.
+  await $.store.set(USAGE_KEY, lookedUpOnly(await $.store.get(USAGE_KEY)))
+  const io = machine($)
+  homePath = await homeDirectory(io)
+  engineVersion = (await $.session.version()).version
+  const host = await $.process.run(['hostname'], { timeoutMs: 2000 })
+  hostname = host.exitCode === 0 ? host.stdout.trim() : null
+  // The session's status: read every two seconds from the engine, git, gh and the transcript.
+  startStatus(
+    {
+      run: (argv, init) => $.process.run(argv, init),
+      read: async path => ((await $.fs.exists(path)) ? $.fs.read(path) : null),
+      list: async path => ((await $.fs.exists(path)) ? $.fs.list(path) : []),
+      size: async path => ((await $.fs.exists(path)) ? (await $.fs.stat(path)).size : null),
+    },
+    { configPath: await claudeDirectory(io), sessionRoot: await $.session.root() },
+  )
+  sessionId = await $.session.id()
+  await adoptSession(paneContext($), sessionId, false)
+  $.clock.every(STATUS_POLL_MS, () => {
+    void collectStatus(statusContext($)).catch((error: unknown) => debugLog($, error))
+  })
+  $.clock.every(PANE_TICK_MS, () => {
+    void (async () => {
+      const pane = paneContext($)
+      if (!(await syncPaneOpen(pane))) return
+      const now = await $.clock.now()
+      await update($, tick, () => now)
+      // The Codex card is looked up while the pane is open, at most every five minutes.
+      await refreshCodexAccount(pane.codex, false)
+    })().catch((error: unknown) => debugLog($, error))
+  })
+  $.clock.every(TICK_MS, () => {
+    const pane = paneContext($)
+    const ctx = pane.accounts
+    void syncLive(ctx)
+      .catch((error: unknown) => debugLog($, error))
+      .then(() => tickOrca(ctx))
+      // Orca writes a copy as it is while a Claude terminal runs in it: each is kept from expiring.
+      .then(claude => (claude ? keepOrcaCopiesFresh(ctx, claude) : undefined))
+      .catch((error: unknown) => debugLog($, error))
+      .then(() => refresh(pane, false))
+      // The live account is kept current between Claude Code's own readings too.
+      .then(() => pollLive(ctx))
+      .catch((error: unknown) => debugLog($, error))
+  })
+}
+
+/** Codex as subagent types, and the commands of a codex agent's view, where the Codex CLI runs. */
+async function offerCodex($: EngineInterface): Promise<void> {
+  const io = machine($)
+  if (!(await codexInstalled(io))) return
+  // The Accounts tab draws a Codex card from now on; a reload keeps the one it has.
+  if ((await read($, codexAccount)) === null) await update($, codexAccount, () => ({ lookedAt: 0 }))
+  for (const spec of codexAgentSpecs(await codexModels(io))) await $.agent.register(spec)
+  for (const spec of codexCommandSpecs(m)) await $.command.register(spec)
+}
+
 // ── hooks ─────────────────────────────────────────────────────────────────
 
 export const register: Register = (on, options) => {
@@ -319,60 +490,14 @@ export const register: Register = (on, options) => {
   const isBandShown = options.showStatusBand !== false
 
   on('session.start', async ($, e, next) => {
-    const { language } = await $.settings.read()
-    const localeVariables = [await $.env.get('LC_ALL'), await $.env.get('LC_MESSAGES'), await $.env.get('LANG')]
-    locale = resolveLocale(language, localeVariables)
-    m = messagesFor(locale)
-    release = await readRelease($)
-    // A later published release turns the header's date into Update Required: asked now and every few hours.
-    void followLatestRelease($).catch((error: unknown) => debugLog($, error))
-    $.clock.every(RELEASE_CHECK_MS, () => {
-      void followLatestRelease($).catch((error: unknown) => debugLog($, error))
-    })
-    $.ui.status(undefined)
-    // Readings no lookup produced (a figure copied from another login, a message an older build kept) go.
-    await $.store.set(USAGE_KEY, lookedUpOnly(await $.store.get(USAGE_KEY)))
-    const io = machine($)
-    homePath = await homeDirectory(io)
-    engineVersion = (await $.session.version()).version
-    const host = await $.process.run(['hostname'], { timeoutMs: 2000 })
-    hostname = host.exitCode === 0 ? host.stdout.trim() : null
-    // The session's status: read every two seconds from the engine, git, gh and the transcript.
-    startStatus(
-      {
-        run: (argv, init) => $.process.run(argv, init),
-        read: async path => ((await $.fs.exists(path)) ? $.fs.read(path) : null),
-        list: async path => ((await $.fs.exists(path)) ? $.fs.list(path) : []),
-        size: async path => ((await $.fs.exists(path)) ? (await $.fs.stat(path)).size : null),
-      },
-      { configPath: await claudeDirectory(io), sessionRoot: await $.session.root() },
-    )
-    sessionId = await $.session.id()
-    await adoptSession(paneContext($), sessionId, false)
-    $.clock.every(STATUS_POLL_MS, () => {
-      void collectStatus(statusContext($)).catch((error: unknown) => debugLog($, error))
-    })
-    $.clock.every(PANE_TICK_MS, () => {
-      void (async () => {
-        if (!(await syncPaneOpen(paneContext($)))) return
-        const now = await $.clock.now()
-        await update($, tick, () => now)
-      })().catch((error: unknown) => debugLog($, error))
-    })
-    $.clock.every(TICK_MS, () => {
-      const pane = paneContext($)
-      const ctx = pane.accounts
-      void syncLive(ctx)
-        .catch((error: unknown) => debugLog($, error))
-        .then(() => tickOrca(ctx))
-        // Orca writes a copy as it is while a Claude terminal runs in it: each is kept from expiring.
-        .then(claude => (claude ? keepOrcaCopiesFresh(ctx, claude) : undefined))
-        .catch((error: unknown) => debugLog($, error))
-        .then(() => refresh(pane, false))
-        // The live account is kept current between Claude Code's own readings too.
-        .then(() => pollLive(ctx))
-        .catch((error: unknown) => debugLog($, error))
-    })
+    const starting = startAccounts($)
+    // Codex is offered once the language is settled, beside the start rather than inside it:
+    // it never holds the start up, and a start that fails, which the engine reports, still offers it.
+    void starting
+      .catch(() => undefined)
+      .then(() => offerCodex($))
+      .catch((error: unknown) => debugLog($, error))
+    await starting
 
     return next(e)
   })
@@ -380,6 +505,8 @@ export const register: Register = (on, options) => {
   // A /clear goes on in this process under a new session id, and no session.start fires for
   // it: the new session's state is filled here, once the old one has ended.
   on('session.end', async ($, e, next) => {
+    // A Codex turn left waiting on a question ends with the session.
+    closeHeldCodex()
     const result = await next(e)
     if (e.reason === 'clear') {
       $.clock.after(CLEAR_SETTLE_MS, () => {
@@ -387,6 +514,9 @@ export const register: Register = (on, options) => {
           sessionId = await $.session.id()
           await adoptSession(paneContext($), sessionId, true)
         })().catch((error: unknown) => debugLog($, error))
+        // The emptied state drops the Codex card; registering again keeps the codex agents and
+        // commands whatever /clear did to the session's. Apart, so a failed adoption keeps Codex.
+        void offerCodex($).catch((error: unknown) => debugLog($, error))
       })
     }
 
@@ -400,11 +530,78 @@ export const register: Register = (on, options) => {
   })
 
   // The effort each main-loop request asks for, as the engine settled it (a subagent's are its own).
+  // Every loop's latest effort is kept for the agents it spawns.
   on('turn.step', async function* ($, e, next) {
+    if (e.effort === undefined) requestEfforts.delete(e.agentId ?? '')
+    else requestEfforts.set(e.agentId ?? '', String(e.effort))
     if (!e.agentId) await noteRequestEffort(statusContext($), e.effort).catch((error: unknown) => debugLog($, error))
 
-    return yield* next(e)
+    // A codex agent's model request is answered by driving `codex app-server`; any other goes on.
+    return yield* codexStep(codexContext($), e, next)
   })
+
+  // A Claude subagent's model and effort after its task in the agent list: ` · Opus 5.5 (high)`.
+  // The label is decoration: the agent starts whether or not it can be made.
+  on('agent.spawn', async ($, e, next) => {
+    const codex = CODEX_TYPES[e.subagentType]
+    if (codex) {
+      // A codex agent keeps the stand-in's Claude model, so a run this module does not
+      // answer reaches one the Anthropic API serves; its row names Codex's model.
+      // The label is decoration, as for a Claude agent: Codex's config unread, the row goes without one.
+      const flags = codexFlagsOf(e.prompt, codex.pin)
+      const config = await codexConfig(machine($)).catch((error: unknown) => {
+        debugLog($, error)
+
+        return undefined
+      })
+      const label = config ? codexLabel(config, 'error' in flags ? {} : flags) : undefined
+      const started = await next(label ? { ...e, description: `${e.description} · ${label}` } : e)
+      const agentId = started.agentId
+      // The spawn prompt carries the agent's options, wherever the engine later places it.
+      if (agentId) await update($, codexOpenings, all => ({ ...all, [agentId]: e.prompt }))
+
+      return started
+    }
+    const label = await spawnLabel($, e).catch((error: unknown) => {
+      debugLog($, error)
+
+      return undefined
+    })
+
+    return next(label ? { ...e, description: `${e.description} · ${label}` } : e)
+  })
+
+  // A /codex- command acts on the codex agent whose view is open and answers in its band.
+  on('command.run', async ($, e, next) => {
+    if (!isOwnCodexCommand(e.command)) return next(e)
+
+    return (await codexCommand(codexContext($), e.command, e.args)) ? {} : { text: m.codexOpenView(e.command) }
+  })
+
+  // A message sent to a codex agent while Codex works joins Codex's running turn, so Codex
+  // reads it now; the agent is not also sent it, which would start another Codex turn.
+  on('session.send', async ($, e, next) => {
+    const agent = (await $.agent.list()).find(one => one.id === e.to || one.name === e.to)
+    if (!agent || !CODEX_TYPES[agent.type] || isCodexCommand(e.text)) return next(e)
+
+    return (await steerCodex(agent.id, e.text)) ? { isDelivered: true } : next(e)
+  })
+
+  // The transcript's Agent row names a codex type in words, not `sc-accounts:codex-read`.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    const input = e.props.input as { subagent_type?: unknown } | undefined
+    const type = e.props.tool === 'Agent' && typeof input?.subagent_type === 'string' ? CODEX_TYPES[input.subagent_type] : undefined
+    if (!type) return next(e)
+
+    return next({ ...e, props: { ...e.props, input: { ...input, subagent_type: type.shown } } })
+  })
+
+  // In a codex agent's view the footer names its commands and the "/" menu lists them alone:
+  // Claude Code's own act on the main session rather than the agent. Elsewhere they are left out.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) =>
+    openCodexView(e.surface) ? next({ ...e, props: { ...e.props, tail: e.props.tail ? `${e.props.tail} · ${CODEX_HINT}` : CODEX_HINT } }) : next(e),
+  )
+  on('command.describe', async ($, e, next) => (Boolean(openCodexView()) !== isOwnCodexCommand(e.command) ? next({ ...e, isHidden: true }) : next(e)))
 
   // This session's `/effort`: the level it names shows at once, a default picked from its list once saved.
   on('command.run', { command: 'effort' }, async ($, e, next) => {
@@ -449,31 +646,52 @@ export const register: Register = (on, options) => {
   // gauges, the place and PR, and the lines changed. Cells move to a new row
   // when the band is too narrow.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !isBandShown) return next(e)
-    const status = await read($, statusInfo)
-    const liveUuid = await read($, live)
-    const account = (await read($, accounts)).find(one => one.uuid === liveUuid)
-    const reading = liveUuid ? (await read($, usage))[liveUuid] : undefined
-    const windows = (reading?.limits ?? []).filter(limit => limit.label === '5h' || limit.label === 'wk')
-    const contextUsed = (await $.session.usage()).context.percent ?? status?.contextUsed ?? null
-    if (!status && contextUsed === null && (!account || windows.length === 0)) return next(e)
+    // The band is drawn for the view on screen: in a codex agent's, the reply to the last
+    // /codex- command run there shows over it.
+    const viewed = e.props.view?.agentId
+    const viewedType = viewed === undefined ? undefined : await viewedAgentType($, viewed)
+    if (setOpenCodexView(e.surface, viewedType && CODEX_TYPES[viewedType] ? viewed : undefined)) {
+      $.ui.invalidate('ui.render')
+      $.ui.invalidate('command.describe')
+    }
+    const codexView = openCodexView(e.surface)
+    const reply = codexView === undefined ? undefined : codexReplyIn(codexView)
+    // A band that cannot be drawn leaves the engine's own, under the reply all the same.
+    const band = await (async () => {
+      if (e.props.hasSurvey || !isBandShown) return next(e)
+      const status = await read($, statusInfo)
+      const liveUuid = await read($, live)
+      const account = (await read($, accounts)).find(one => one.uuid === liveUuid)
+      const reading = liveUuid ? (await read($, usage))[liveUuid] : undefined
+      const windows = (reading?.limits ?? []).filter(limit => limit.label === '5h' || limit.label === 'wk')
+      const contextUsed = (await $.session.usage()).context.percent ?? status?.contextUsed ?? null
+      if (!status && contextUsed === null && (!account || windows.length === 0)) return next(e)
 
-    return StatusBand($.ui.resolve(e), {
-      status,
-      account,
-      reading,
-      windows,
-      contextUsed,
-      now: await $.clock.now(),
-      locale,
-      room: Math.max(20, e.props.bodyColumns),
-      toolbox: toolboxCell(await read($, toolboxSummary)),
-      // The ui.press hook below takes the account, and the workspace's the place and the lines;
-      // this runs for a press neither took (the workspace without its hook).
-      onPress: target => {
-        void toggle(paneContext($), target).catch((error: unknown) => $.ui.toast(message(error)))
-      },
+      return StatusBand($.ui.resolve(e), {
+        status,
+        account,
+        reading,
+        windows,
+        contextUsed,
+        now: await $.clock.now(),
+        locale,
+        room: Math.max(20, e.props.bodyColumns),
+        toolbox: toolboxCell(await read($, toolboxSummary)),
+        // The ui.press hook below takes the account, and the workspace's the place and the lines;
+        // this runs for a press neither took (the workspace without its hook).
+        onPress: target => {
+          void toggle(paneContext($), target).catch((error: unknown) => $.ui.toast(message(error)))
+        },
+      })
+    })().catch((error: unknown) => {
+      // Without a reply to show, the failure is the engine's to report, as it always was.
+      if (!reply) throw error
+      debugLog($, error)
+
+      return next(e)
     })
+
+    return reply ? CodexReplyBand($.ui.resolve(e), reply, band) : band
   })
 
   // A band press is taken here, inside the person's press, and toggled before the chain

@@ -167,6 +167,20 @@ const en = {
   bandUsage: 'Usage: /sc:accounts band on|off',
   release: (version: string, date?: string) => (date ? `v${version} (${date})` : `v${version}`),
   updateRequired: 'Update Required',
+  codexCommands: {
+    model: 'The Codex model for this codex agent, from its next Codex turn',
+    effort: 'The reasoning effort for this codex agent, from its next Codex turn',
+    sandbox: 'The sandbox for this codex agent, from its next Codex turn',
+    approvals: 'When Codex asks for approval in this codex agent, from its next Codex turn',
+    status: 'What Codex runs this agent with, its session and its tokens',
+    help: 'The codex agent commands',
+  },
+  codexOpenView: (command: string) => `Open a codex agent's view to use /${command}.`,
+  codexSignedOut: 'Not logged in to Codex. Run `codex login` in a terminal.',
+  codexApiKey: 'API key',
+  codexCredits: (balance: string) => `Credits ${balance}`,
+  codexCreditsUnlimited: 'Credits unlimited',
+  codexNoAnswer: (seconds: number) => `Codex did not answer within ${seconds} seconds.`,
 }
 
 export type Messages = typeof en
@@ -334,6 +348,20 @@ const ko: Messages = {
   bandUsage: '사용법: /sc:accounts band on|off',
   release: (version, date) => (date ? `v${version} (${date})` : `v${version}`),
   updateRequired: '업데이트 필요',
+  codexCommands: {
+    model: '이 codex 에이전트의 다음 Codex 턴부터 쓸 Codex 모델',
+    effort: '이 codex 에이전트의 다음 Codex 턴부터 쓸 추론 effort',
+    sandbox: '이 codex 에이전트의 다음 Codex 턴부터 쓸 샌드박스',
+    approvals: '이 codex 에이전트의 다음 Codex 턴부터 Codex가 승인을 요청하는 조건',
+    status: '이 에이전트의 Codex 실행 설정, 세션, 토큰',
+    help: 'codex 에이전트 명령 목록',
+  },
+  codexOpenView: command => `/${command} 명령은 codex 에이전트 화면을 연 상태에서 실행해 주세요.`,
+  codexSignedOut: 'Codex에 로그인하지 않았습니다. 터미널에서 `codex login`을 실행해 주세요.',
+  codexApiKey: 'API 키',
+  codexCredits: balance => `크레딧 ${balance}`,
+  codexCreditsUnlimited: '크레딧 무제한',
+  codexNoAnswer: seconds => `Codex가 ${seconds}초 안에 응답하지 않았습니다.`,
 }
 
 export function messagesFor(locale: Locale): Messages {

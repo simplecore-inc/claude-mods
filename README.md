@@ -21,9 +21,12 @@ Plugins for [Claude Code](https://code.claude.com) that add panes, a status band
 
 - Keep several Claude logins and switch every running session to another in one step.
 - See each account's five-hour, weekly and per-model usage, with reset times, and what it spent past its plan when Claude reports it.
+- See the Codex login the session's Codex uses, with its limits and credits, on a card of its own where the Codex CLI is installed.
 - **Usage**: the tokens used on this machine by day, model and project, counted from Claude Code's transcripts.
 - **Storage**: what `~/.claude` holds by kind and project, and a cleanup of idle sessions confirmed by typing a word.
 - A status band above the prompt: account, model and effort, task, context and usage, branch and PR, lines changed. Press the account's name to open the accounts pane, or the branch or the lines changed to open the workspace.
+- Each subagent's [model and effort](docs/accounts.md#subagent-models-in-the-agent-list) after its task in Claude Code's agent list: `Review auth · Opus 5.5 (high)`.
+- Where the Codex CLI is installed, [OpenAI Codex as a subagent](docs/accounts.md#codex-as-a-subagent): Claude starts it with the Agent tool (`sc-accounts:codex-read`, `codex-write`, `codex-run`) and sc-accounts drives `codex app-server` in its place.
 - An optional [webhook](docs/accounts.md#webhook) sends the status to an external system. It is off by default; leave it off if you have nothing to send to.
 
 ### [Workspace](docs/workspace.md) · `/sc:workspace`

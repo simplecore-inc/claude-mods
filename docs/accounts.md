@@ -49,6 +49,8 @@ The switch dialog says when Orca is switched too. sc-accounts reaches Orca where
 
 Orca writes the copy of the account selected in it as it is while a Claude terminal runs in Orca, even when the copy has expired; every running session then refreshes the same refresh token at once, and all but the first are signed out. So sc-accounts refreshes each copy Orca keeps (on macOS a keychain item, elsewhere `.credentials.json` in the account's folder under `claude-accounts` in Orca's data folder, or under `~/.local/share/orca` for an account Orca keeps in WSL) within an hour of its expiry, checking every few minutes, and writes the new login to Orca's copy and to its own; a lookup of such an account refreshes both the same way. Where the two copies hold different refresh tokens (one rotated and the other left on the spent token, or two logins made apart), the one that expires later is refreshed first, the other when the server refuses it, and the one that refreshes is written to both. The live account and the one selected in Orca are left to Claude Code and Orca. A login the server refuses in both copies is said once, with the account to sign in to again before selecting it in Orca. A folder counts only where Orca's own marker in it (`.orca-managed-claude-auth`) names the account. Where no copy can be reached, the account is not refreshed here and its card keeps the last figures until it is next in use.
 
+A switch, here or in Orca, changes the account's token and keeps the MCP connectors' and plugins' authorizations (`mcpOAuth`, `mcpOAuthClientConfig`, `mcpXaaIdp`, `mcpXaaIdpConfig`, `pluginSecrets`) as the live login holds them, so a connector authorized after an account was saved stays authorized.
+
 Removing an account (`✕`) asks in a dialog first. Remove (or Enter) deletes its saved credential: the keychain item on macOS, the vault file elsewhere. Using it again takes a new `/login`. Esc or Cancel closes the dialog.
 
 ## The accounts pane
@@ -62,7 +64,9 @@ The pane has the tabs **Accounts**, **Usage** and **Storage**; a digit switches 
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
 - `Spent past the plan: 12.34 USD of 50.00 USD`: what the account spent beyond its plan, exactly as Claude's usage lookup reports it for that account. It shows only when spending past the plan is on or something was spent; nothing is estimated.
+- Under the Claude cards, where the Codex CLI runs, a **Codex** card: the Codex login this session's Codex uses (its email and plan, an API key, or that no one is logged in), its windows on the same gauges, and its credits, such as `Credits 62,500`. It is read from `codex app-server` (`account/read` and `account/rateLimits/read`) in the environment the session started in, so where `CODEX_HOME` is set (Orca sets it per account) it is that folder's login. It is looked up while the pane is open, at most every five minutes, and at once on **Refresh**; a lookup that takes over 15 seconds is given up, and the figures before stay with the reason. `/sc:accounts list` prints it as a last line. The card shows the login and does not switch it.
 - The footer: **Refresh**, **Add account** and **Webhook**. **✕ Close** is at the right of the header, the first row of the pane.
+
 ### Usage
 
 ![The Usage tab: tokens on this machine by day, model and project](images/accounts-usage.svg)
@@ -130,6 +134,160 @@ The mod reads the status itself, so no status line command is needed, and the ro
 | PR | `gh pr view` for the branch, at most every three minutes; nothing without `gh` |
 | Context | the session's context reading |
 | Lines added and removed | each Edit, MultiEdit, Write and NotebookEdit call: the file before and after, compared line by line |
+
+## Subagent models in the agent list
+
+Claude Code's agent list shows a subagent's task but not what it runs on. sc-accounts adds the model and effort after the task:
+
+```
+Review auth · Opus 5.5 (high)
+Check label.ts · Sonnet 5.5 (medium)
+Say ok · Haiku
+```
+
+| The agent | Its label |
+| --- | --- |
+| `general-purpose`, a fork, an agent file's `model: inherit` | the parent's model and effort |
+| an agent file with `model:` (and `effort:`) | that model, and that effort |
+| the Agent tool's `model` option | that model; the parent's effort only when it is the same model |
+| Explore, Plan and the other built-in agents | none: the engine chooses their model |
+| a plugin's agent (`codex:read`) | none: the plugin labels its own |
+
+Where the model cannot be known before the agent starts, the row is left as it was.
+
+- The label is added by an `agent.spawn` hook before the subagent starts, to the description the agent list shows.
+- Agent files are read from the project's `.claude/agents/` and then from `agents/` in Claude Code's config directory (`~/.claude/agents/`, or `$CLAUDE_CONFIG_DIR/agents/`), matched by their `name`. An agent file in a subfolder, an agent defined in settings, a flag or policy, and an agent file with no `model:` line go unlabelled.
+- The effort is the agent file's `effort`, else that of the parent's latest request when the agent runs on the parent's model; another model may take no effort at all.
+- An alias of the parent's family is the parent's model (`opus` under Opus 5.5 reads `Opus 5.5 (high)`); any other alias reads as its name without a version: `haiku` is `Haiku`. An agent file's `effort` is shown even when the Agent tool's `model` option replaces its model.
+
+Adapted from the `agent-models` plugin of [alex2481kobe/claude-mods](https://github.com/alex2481kobe/claude-mods) (Apache License 2.0).
+
+## Codex as a subagent
+
+Where the [Codex CLI](https://github.com/openai/codex) is installed, Claude can start OpenAI Codex with the Agent tool as it starts any other subagent. No Claude model runs inside the agent: sc-accounts drives `codex app-server` in its place.
+
+- The agent list shows it with its model and effort (`· Sol 6.1 (xhigh)`), its running time and its token count. The count is Codex's current context plus what it wrote, as Claude Code counts a Claude subagent.
+- Its activity line follows Codex's work, and Enter opens its view, where Codex's steps appear as they happen.
+- It runs in the background, and its report comes back to Claude.
+- A message sent to it resumes the same Codex session. A message Claude sends while Codex works joins Codex's running turn; one typed in the agent's view waits for the turn to end.
+- When Codex asks for an approval or an answer, the agent reports the question, and its next message answers it in the same paused turn.
+- Stopping the agent stops Codex, and so does Claude Code exiting or crashing.
+
+| Agent type | Shown as | Sandbox and approvals | Use it for |
+| --- | --- | --- | --- |
+| `sc-accounts:codex-read` | `Codex read-only` | `read-only`, approvals off | second opinions, review, research, scoping |
+| `sc-accounts:codex-write` | `Codex workspace-write` | `workspace-write`, approvals off | bounded implementation in the working directory |
+| `sc-accounts:codex-run` | `Codex` | your Codex config, changed by flags | anything else Codex can be set up to do |
+
+### Requirements
+
+- macOS or Linux: the agent talks to Codex through a named pipe. On Windows the agent types are not offered.
+- The Codex CLI with `codex app-server` (tested on 0.159 and 0.160), installed and logged in, on the `PATH` Claude Code starts with:
+
+  ```sh
+  npm install -g @openai/codex
+  codex login
+  ```
+
+  The agent types are offered when a session starts and `codex` is found; install it, then run `/reload-plugins`.
+
+### Use
+
+Ask Claude for it by name:
+
+> Have sc-accounts:codex-read review the changes in src/auth and report anything risky.
+
+Codex cannot see the conversation with Claude, so Claude gives it a self-contained prompt. Codex uses your own Codex login, model and config.
+
+The Agent tool's `model` option names Claude models, so Codex is set up in the prompt. The prompt may open with Codex CLI flags, one per line, spelled as `codex exec --help` spells them (`model: gpt-6-astra`, `--sandbox workspace-write`, or a flag alone on its line). They are passed to Codex and removed from the task. `Model:` and `Effort:` may be written in any case:
+
+```
+model: gpt-6-astra
+effort: high
+Review app.js for bugs and report back.
+```
+
+The agent types' descriptions list the models your Codex knows (from `models_cache.json` in `CODEX_HOME`, else `~/.codex`), so Claude can be asked in plain words.
+
+Only an exact option line is an option: a flag's name with one plain value (a path, or a config `key=value`, may hold spaces), or a flag that takes no value alone on its line. The first line that is not one starts the task, so a prompt that opens with prose such as `search: every call to fetch` is passed to Codex whole.
+
+`codex-read` and `codex-write` take `model`, `effort` and the flags that leave their sandbox alone; `sandbox`, approvals, `add-dir` and `cd` are refused there. `codex-run` takes every flag that applies to a session sc-accounts drives:
+
+| Flag | What Codex gets |
+| --- | --- |
+| `model`, `effort` | `model`, `model_reasoning_effort` |
+| `sandbox` (`s`) | `sandbox_mode` |
+| `ask-for-approval` (`a`) | `approval_policy` |
+| `approve-for-me` | the automatic reviewer, in `workspace-write` |
+| `dangerously-bypass-approvals-and-sandbox` | `danger-full-access` with approvals off |
+| `add-dir` | an extra writable root, beside your config's |
+| `search`, `local-provider`, `cd` (`C`), `image` (`i`) | live web search, the model provider, the folder, images |
+| `config` (`c`), `enable`, `disable`, `strict-config` | passed as given |
+| `ephemeral`, `output-schema` | an unsaved session, a JSON Schema for the answer |
+
+Everything left out comes from your Codex config. An option line for a flag `codex app-server` has no use for (`profile: fast`, `worktree`, `json` and the like) stops the run with the reason rather than being dropped.
+
+### Answering Codex
+
+When Codex asks for something, the agent hands the question back:
+
+```
+Codex asks to run:
+  printf 'hi' > note.txt
+in /path/to/project
+Reason: requires approval by policy
+Reply "approve", "approve for session", "decline", or "cancel" (decline and stop the turn).
+```
+
+Claude answers it or asks you, then sends the reply to the agent as a message, and Codex carries on in the same turn. Questions for the user and MCP servers' forms work the same way. A question lives as long as the Codex that asked it: once that Codex is gone (it exited, the session was resumed, or the plugin reloaded), a reply such as "approve" is not sent as a new task, and the agent says the question has expired.
+
+Who Codex asks is set by its config. With `approvals_reviewer` set to Codex's automatic reviewer, Codex never asks. To be asked, for one agent:
+
+```
+ask-for-approval: on-request
+config: approvals_reviewer="user"
+Create note.txt containing hi.
+```
+
+### Commands in the agent's view
+
+Open a codex agent's view (select it in the agent list, press Enter) and run a command. The reply shows above the prompt in that view, and neither Codex nor Claude is sent it:
+
+| Command | What it does |
+| --- | --- |
+| `/codex-model <id>` | the Codex model, from the agent's next Codex turn |
+| `/codex-effort <level>` | the reasoning effort, from the next turn |
+| `/codex-sandbox <read-only\|workspace-write\|danger-full-access>` | the sandbox, from the next turn |
+| `/codex-approvals <on-request\|never>` | when Codex asks for approval, from the next turn |
+| `/codex-status` | what Codex said the session ran with at its last turn, what changes next turn, the Codex session and its running token total |
+| `/codex-help` | the list |
+
+A setting is kept for that agent and goes with each of its later Codex turns. `codex-read` and `codex-write` refuse `/codex-sandbox` and `/codex-approvals`. While a codex agent's view is open, the footer and the `/` menu list these commands alone: Claude Code's own commands act on the main session, not on the agent, so they are hidden there (typed in full, they still run). Elsewhere the `/codex-` commands are hidden. The commands' replies are in English, as Claude reads them too when it sends a command with SendMessage.
+
+### How Codex runs
+
+- When a codex agent's loop asks its model for a response, a `turn.step` hook answers instead: it starts `codex app-server` with the agent's flags as config overrides, starts or resumes the Codex session in the session's working directory, shows Codex's messages and commands in the agent's view as they happen, and reports Codex's token usage on the agent's row.
+- A plugin's child process takes its input once, so sc-accounts writes to `codex app-server` through a named pipe in a private temporary folder, which goes when the process does.
+- Codex runs in a process group of its own under a small shell. Stopping the agent ends the shell and Codex with it; if Claude Code exits without stopping it, the shell sees its parent gone within a second or two and ends Codex and the folder.
+- Codex's final message, or its question, goes back as the agent's report: through the `SubagentHandback` tool in an interactive session, or as the final text where that tool does not exist (headless, SDK). A report that never reached the caller is given again the next time the agent's loop runs, once.
+- A step interrupted before Codex finished stops Codex, and the agent hands back only `codex: stopped before Codex finished.` The next message resumes the same Codex session with that message alone.
+- Every message sent to the agent is passed to Codex once, in the sender's words: as the answer to a waiting question, added to Codex's running turn (`turn/steer`), or as a new turn of the same Codex session.
+
+### Codex caveats
+
+- The Agent tool's `model` and `cwd` options are ignored: Codex uses your Codex config, in the session's working directory.
+- What Codex may do is decided by its sandbox, approvals and requirements, not by Claude Code's permission prompts. `codex-run` takes every flag Codex accepts, `dangerously-bypass-approvals-and-sandbox` included; Codex's own requirements (`allowed_sandbox_modes`, `allowed_approval_policies`) are the place to forbid one.
+- `codex app-server` takes no profiles: set those values with `config:` lines.
+- Codex's `workspace-write` sandbox keeps `.git` read-only, so `codex-write` cannot stage or commit.
+- A question left unanswered keeps that Codex waiting until it is answered or the session ends.
+- An agent started with `ephemeral` cannot take follow-ups.
+- A message typed in an agent's view reaches the plugin only once the agent's turn has ended, so it cannot join Codex's running turn; it runs as the next turn.
+- A command's reply shows above the prompt only while that view stays open.
+- Claude Code may run the agent's loop again for a copy of a message it places later; Codex is not asked again, and Claude gets the one line `codex: nothing new to send to Codex.`
+- Claude Code's task list (`/tasks`) names the stand-in's model, Haiku, for a codex agent. The agent keeps a Claude model so that a run the plugin does not answer (the plugin not loaded, or the session resumed without it) reaches the stand-in, which reports that Codex did not run.
+- `app-server`'s protocol is Codex's own and may change between Codex releases.
+
+Adapted from the `codex` plugin of [alex2481kobe/claude-mods](https://github.com/alex2481kobe/claude-mods) (Apache License 2.0).
 
 ## Settings
 

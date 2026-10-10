@@ -158,6 +158,28 @@ export async function readLiveCredential(io: Io): Promise<Credential | null> {
 }
 
 /** Writes Claude Code's keychain item on macOS; the file backend keeps its login in the file alone. */
+/**
+ * The fields of Claude Code's login that belong to the machine rather than to
+ * the account: the MCP connectors' and the plugins' authorizations, kept beside
+ * the account's token. Orca keeps them across a switch as well (1.4.223).
+ */
+export const SHARED_LOGIN_FIELDS = ['mcpOAuth', 'mcpOAuthClientConfig', 'mcpXaaIdp', 'mcpXaaIdpConfig', 'pluginSecrets'] as const
+
+/**
+ * An account's login carrying the live login's machine-wide fields in place
+ * of its own: a saved login holds them as they were when it was saved, and
+ * writing those back would undo every connector authorized since.
+ */
+export function withLiveSharedFields(credential: Credential, live: Credential | null): Credential {
+  const next: Credential = { ...credential }
+  for (const field of SHARED_LOGIN_FIELDS) {
+    delete next[field]
+    if (live && Object.hasOwn(live, field)) next[field] = live[field]
+  }
+
+  return next
+}
+
 export async function writeLiveKeychain(io: Io, credential: Credential): Promise<void> {
   if ((await platformOf(io)).backend === 'file') return
   const item = await liveItem(io)

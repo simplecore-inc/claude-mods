@@ -122,6 +122,50 @@ export type BandTarget = 'accounts' | 'workspace' | 'toolbox'
 /** One webhook send, test or feed: when, the HTTP status or why none came, and the start of what the receiver answered. */
 export type WebhookSend = { at: number; status: number | null; error: string | null; reply: string | null }
 
+/** The messages each codex agent has passed to Codex, by agent id. */
+export type CodexSent = Record<string, string[]>
+
+/** The prompt each codex agent was spawned with, by agent id. */
+export type CodexOpenings = Record<string, string>
+
+/** A Codex CLI option a codex agent's `/codex-*` commands set, as its option line names it. */
+export type CodexOptionName = 'model' | 'effort' | 'sandbox' | 'ask-for-approval'
+
+/** What each codex agent's commands set, by agent id; each applies from the agent's next Codex turn. */
+export type CodexOptions = Record<string, Partial<Record<CodexOptionName, string>>>
+
+/**
+ * What Codex reported a codex agent's session runs with, at its last turn:
+ * the session, model, reasoning effort, sandbox and approval policy, and the
+ * session's token total.
+ */
+export type CodexRun = {
+  threadId: string
+  model: string
+  effort: string | null
+  sandbox: string
+  approvals: string
+  tokens: { input: number; cached: number; output: number }
+}
+
+export type CodexRuns = Record<string, CodexRun>
+
+/** The Codex login this session's Codex uses, as `codex app-server` reports it. */
+export type CodexLogin = { kind: 'chatgpt'; email: string | null; plan: string | null } | { kind: 'apiKey' } | { kind: 'none' }
+
+/**
+ * The Codex account this session's Codex uses and its limits, looked up
+ * through `codex app-server`. `lookedAt` is when the last lookup ended, 0
+ * before the first; `reading` holds the windows, or why the lookup failed.
+ */
+export type CodexAccountView = {
+  login?: CodexLogin
+  reading?: UsageView
+  /** Codex credits, when the account has them: unlimited, or the balance left. */
+  credits?: { isUnlimited: boolean; balance: number | null }
+  lookedAt: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     /** What this plugin reads of the workspace's state. */
@@ -175,6 +219,16 @@ declare module 'claude-code' {
       storage: StorageView | null
       /** The age in days past which a cleanup deletes a session. */
       cleanupDays: number
+      /** The messages each codex agent has passed to Codex, by agent id. */
+      codexSent: CodexSent
+      /** The prompt each codex agent was spawned with, by agent id. */
+      codexOpenings: CodexOpenings
+      /** What each codex agent's `/codex-*` commands set, by agent id. */
+      codexOptions: CodexOptions
+      /** What Codex last reported each codex agent's session runs with, by agent id. */
+      codexRuns: CodexRuns
+      /** The Codex account this session's Codex uses; null where the Codex CLI does not run. */
+      codexAccount: CodexAccountView | null
     }
   }
 }

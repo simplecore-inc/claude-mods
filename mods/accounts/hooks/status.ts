@@ -3,8 +3,9 @@
  * hooks module feeds with what the engine, git and the transcript say.
  */
 
-/** A model id as Claude Code names it on screen: `claude-opus-5-5` as `Opus 5.5`; anything else as given. */
+/** A model id as Claude Code names it on screen: `claude-opus-5-5` as `Opus 5.5`, an alias `haiku` as `Haiku`; anything else as given. */
 export function displayModel(model: string): string {
+  if (/^[a-z]+$/.test(model)) return `${model.charAt(0).toUpperCase()}${model.slice(1)}`
   const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(model)
   if (!match) return model
   const [, family = '', major, minor] = match

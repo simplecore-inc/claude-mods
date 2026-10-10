@@ -1,17 +1,21 @@
 import type { ElementTable } from 'claude-code'
 
-import type { AccountView, LimitView, UsageView } from '../../types'
+import type { AccountView, CodexAccountView, LimitView, UsageView } from '../../types'
 import { moneyText } from '../anthropic'
-import { bar, displayWidth, formatDuration, isSameReset, packRows, resetCountdown, resetText } from '../format'
+import { bar, displayWidth, formatDuration, groupDecimal, isSameReset, packRows, resetCountdown, resetText } from '../format'
 import type { Locale, Messages } from '../i18n'
 import { Badge, Card, CARD_CHROME, CELL_GAP, countdownTone, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton, Toned } from '../shared/kit'
 
 export const STALE_MARK = '◷'
+/** The product the Codex card is for, as its name is written. */
+const CODEX_NAME = 'Codex'
 
 export type AccountsModel = {
   list: AccountView[]
   liveUuid: string | null
   readings: Record<string, UsageView>
+  /** The Codex account this session's Codex uses; null where the Codex CLI does not run, and no card is drawn. */
+  codex: CodexAccountView | null
   isGuideShown: boolean
   now: number
   locale: Locale
@@ -72,6 +76,86 @@ export function gaugeSlot(cells: { group: LimitView[]; foot: string }[]): number
   return slot
 }
 
+type LimitCell = ReturnType<typeof limitCells>[number]
+
+/**
+ * A card's gauges, packed into rows of the room there is: each cell one
+ * gauge, or the gauges of windows that reset together, over its reset line.
+ * Every card passes the same `slot`, so the gauges line up across them.
+ */
+function LimitRows(ui: ElementTable, id: string, cells: LimitCell[], slot: number, room: number) {
+  const { Box } = ui
+  const spanOf = (count: number) => count * slot + CELL_GAP * (count - 1)
+
+  return packRows(
+    cells.map(cell => ({ ...cell, width: spanOf(cell.group.length) })),
+    room,
+    CELL_GAP,
+  ).map((row, rowIndex) => (
+    <Box key={`${id}-limits-${rowIndex}`} gap={CELL_GAP}>
+      {row.map(({ group, foot, near, width }) => (
+        <Box key={`${id}-${group[0]?.label}`} flexDirection="column" width={width}>
+          <Box gap={CELL_GAP}>
+            {/* A lone gauge fills its slot; gauges that reset together stand side by side
+                as one block, which takes the slots they span. */}
+            {group.length === 1
+              ? group.map(limit => (
+                  <Box key={`${id}-${limit.label}-slot`} width={slot} flexShrink={0}>
+                    {Gauge(ui, `${id}-${limit.label}`, limit.label, limit.percent, undefined, near)}
+                  </Box>
+                ))
+              : group.map(limit => Gauge(ui, `${id}-${limit.label}`, limit.label, limit.percent, undefined, near))}
+          </Box>
+          {foot !== '' && Toned(ui, `${id}-${group[0]?.label}-reset`, foot, near, near ? { isBold: true } : { isDim: true })}
+        </Box>
+      ))}
+    </Box>
+  ))
+}
+
+/** The Codex login's words on its card: the email and plan, the API key, or that no one is logged in. */
+function codexWho(codex: CodexAccountView, m: Messages): { name: string; plan: string } {
+  const login = codex.login
+  if (login?.kind === 'chatgpt') {
+    const plan = login.plan ? `${login.plan.charAt(0).toUpperCase()}${login.plan.slice(1)}` : ''
+
+    return { name: login.email ?? '', plan }
+  }
+
+  return { name: login?.kind === 'apiKey' ? m.codexApiKey : '', plan: '' }
+}
+
+/** The Codex card: the login this session's Codex uses, its windows on the Claude cards' gauges, and its credits. */
+function CodexCard(ui: ElementTable, codex: CodexAccountView, cells: LimitCell[], slot: number, room: number, now: number, m: Messages) {
+  const { Box, Text } = ui
+  const reading = codex.reading
+  const who = codexWho(codex, m)
+  const updated = updatedText(reading, now, m)
+  const credits = codex.credits
+  const creditsLine = !credits ? '' : credits.isUnlimited ? m.codexCreditsUnlimited : credits.balance === null ? '' : m.codexCredits(groupDecimal(credits.balance))
+
+  return Card(
+    ui,
+    'codex-card',
+    false,
+    <Box flexDirection="column">
+      <Text>
+        {Toned(ui, 'codex-name', CODEX_NAME, undefined, { isBold: true })}
+        {who.name !== '' && Toned(ui, 'codex-email', `  ${who.name}`)}
+        {who.plan !== '' && Toned(ui, 'codex-plan', `  ${who.plan}`, undefined, { isDim: true })}
+        {updated !== '' && <Text dimColor>{`  ${updated}`}</Text>}
+      </Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        {LimitRows(ui, 'codex', cells, slot, room)}
+        {!reading && <Text dimColor>{m.loading}</Text>}
+        {codex.login?.kind === 'none' && Toned(ui, 'codex-signed-out', m.codexSignedOut, 'warn')}
+        {reading?.error && Toned(ui, 'codex-error', reading.error, 'danger')}
+        {creditsLine !== '' && Toned(ui, 'codex-credits', creditsLine, undefined, { isDim: true })}
+      </Box>
+    </Box>,
+  )
+}
+
 export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: AccountsActions) {
   const { Box, Text } = ui
   const { list, liveUuid, readings, now, locale, m } = model
@@ -79,8 +163,8 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
   const room = Math.max(20, model.bodyColumns - CARD_CHROME - 2)
   // One gauge width for every card, so the columns line up across them.
   const cellsOf = new Map(list.map(one => [one.uuid, limitCells(readings[one.uuid], now, locale, m)]))
-  const slot = gaugeSlot([...cellsOf.values()].flat())
-  const spanOf = (count: number) => count * slot + CELL_GAP * (count - 1)
+  const codexCells = model.codex ? limitCells(model.codex.reading, now, locale, m) : []
+  const slot = gaugeSlot([...[...cellsOf.values()].flat(), ...codexCells])
 
   return (
     <Box key="accounts" flexDirection="column">
@@ -114,30 +198,7 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               )}
             </Box>
             <Box flexDirection="column" paddingLeft={2}>
-              {packRows(
-                (cellsOf.get(one.uuid) ?? []).map(cell => ({ ...cell, width: spanOf(cell.group.length) })),
-                room,
-                CELL_GAP,
-              ).map((row, rowIndex) => (
-                <Box key={`${one.uuid}-limits-${rowIndex}`} gap={CELL_GAP}>
-                  {row.map(({ group, foot, near, width }) => (
-                    <Box key={`${one.uuid}-${group[0]?.label}`} flexDirection="column" width={width}>
-                      <Box gap={CELL_GAP}>
-                        {/* A lone gauge fills its slot; gauges that reset together stand side by side
-                            as one block, which takes the slots they span. */}
-                        {group.length === 1
-                          ? group.map(limit => (
-                              <Box key={`${one.uuid}-${limit.label}-slot`} width={slot} flexShrink={0}>
-                                {Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent, undefined, near)}
-                              </Box>
-                            ))
-                          : group.map(limit => Gauge(ui, `${one.uuid}-${limit.label}`, limit.label, limit.percent, undefined, near))}
-                      </Box>
-                      {foot !== '' && Toned(ui, `${one.uuid}-${group[0]?.label}-reset`, foot, near, near ? { isBold: true } : { isDim: true })}
-                    </Box>
-                  ))}
-                </Box>
-              ))}
+              {LimitRows(ui, one.uuid, cellsOf.get(one.uuid) ?? [], slot, room)}
               {!reading && <Text dimColor>{m.loading}</Text>}
               {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger')}
               {/* Orca keeps this login and its token is not refreshed here: the figures age until the account is in use. */}
@@ -155,6 +216,7 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
           </Box>,
         )
       })}
+      {model.codex && CodexCard(ui, model.codex, codexCells, slot, room, now, m)}
       {model.isGuideShown && (
         <Box key="guide" flexDirection="column" marginTop={1} paddingLeft={2}>
           {m.addGuide.split('\n').map((line, index) => (
