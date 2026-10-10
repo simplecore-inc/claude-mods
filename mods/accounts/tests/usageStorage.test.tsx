@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { barChartSvg } from '../hooks/shared/kit'
 import { paneProps, SURFACES, seedState, mountPane } from './paneHarness'
 
 test('the Usage tab shows the period, the totals, a bar per day and the top models and projects', async ($, on) => {
@@ -23,12 +24,33 @@ test('the Usage tab shows the period, the totals, a bar per day and the top mode
     expect(await ui.find({ type: 'Text', text: '1.0k' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '4 sessions · 1 responses' })).toBeDefined()
     expect(await ui.find({ key: 'usage-chart' })).toBeDefined()
+    // Glyph rows on the terminal; one picture elsewhere, where rows in the surface's own font leave gaps.
+    if (surface === 'terminal') {
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]/ })).toBeDefined()
+    } else {
+      expect((await ui.findAll({ type: 'Svg' })).length).toBe(1)
+      expect(await ui.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]/ })).toBeUndefined()
+    }
     expect(await ui.find({ type: 'Text', text: 'claude-opus-5-5' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'claude-mods' })).toBeDefined()
     // The Usage tab's footer: refresh the count, close.
     expect(await ui.find({ key: 'add' })).toBeUndefined()
     await ui.unmount()
   }
+})
+
+test('the chart as a picture: a rounded bar per value above zero from one baseline, every fifth label where they are many, labels escaped', () => {
+  const bars = Array.from({ length: 12 }, (_, index) => ({ label: `<${String(index + 1).padStart(2, '0')}`, value: index === 3 ? 0 : index + 1 }))
+  const svg = barChartSvg(bars, 12)
+  expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="164" height="88"')).toBe(true)
+  // Eleven bars above zero; the tallest takes the whole height, a zero none.
+  expect(svg.match(/<rect /g)?.length).toBe(11)
+  expect(svg).toContain('<rect x="154" y="0" width="10" height="72"')
+  // Twelve bars: the 1st, 6th and 11th labelled, each cut to its last two characters and escaped.
+  expect(svg.match(/<text /g)?.length).toBe(3)
+  expect(svg).toContain('>01</text>')
+  expect(barChartSvg([{ label: 'a<b', value: 1 }], 1)).toContain('>&lt;b</text>')
 })
 
 test('while the transcripts are counted the Usage tab says how far it has got', async ($, on) => {

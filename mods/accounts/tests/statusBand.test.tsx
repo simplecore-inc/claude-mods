@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { look, pressedLook } from '../hooks/views/band'
+import { look } from '../hooks/views/band'
 import { SURFACES, STATUS, bandProps, seedState } from './paneHarness'
 
 test('the band above the prompt shows the live account and its usage, left-aligned', async ($, on) => {
@@ -17,6 +17,25 @@ test('the band above the prompt shows the live account and its usage, left-align
   const narrow = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: bandProps(40) })
   expect(await narrow.find({ key: 'status-row-1' })).toBeDefined()
   await narrow.unmount()
+})
+
+test('a remote surface wraps the band itself, under no rule; the terminal packs rows to its cells under one', async ($, on) => {
+  seedState(on, { status: STATUS })
+  // Narrow enough that the terminal needs a second row.
+  const desktop = await $.ui.mount({ plugin: 'sc-accounts', surface: 'desktop', component: 'AbovePrompt', props: bandProps(40) })
+  expect(await desktop.find({ type: 'Text', text: /^─+$/ })).toBeUndefined()
+  const flow = await desktop.find({ key: 'status-row-0' })
+  expect(flow?.props).toMatchObject({ flexWrap: 'wrap' })
+  expect(flow?.children?.length).toBeGreaterThan(3)
+  for (const child of flow?.children ?? []) expect(child.props).toMatchObject({ flexShrink: 0 })
+  expect(await desktop.find({ key: 'status-row-1' })).toBeUndefined()
+  await desktop.unmount()
+
+  const terminal = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: bandProps(40) })
+  expect((await terminal.find({ type: 'Text', text: /^─+$/ }))?.text).toBe('─'.repeat(40))
+  expect((await terminal.find({ key: 'status-row-0' }))?.props.flexWrap).toBeUndefined()
+  expect(await terminal.find({ key: 'status-row-1' })).toBeDefined()
+  await terminal.unmount()
 })
 
 test('with the accounts pane closed, pressing the account\'s name opens it with the keys; the context and the usage only show', async ($, on) => {
@@ -36,18 +55,14 @@ test('with the accounts pane closed, pressing the account\'s name opens it with 
   })
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'sc-accounts', surface, component: 'AbovePrompt', props: bandProps(160) })
-    // The account's Button lies over its name, hidden until the pointer is on it, with the same text.
-    const hidden = (await ui.findAll({ type: 'Box' })).filter(found => found.props.display === 'none')
-    expect(hidden.map(found => found.props)).toContainEqual(expect.objectContaining({ position: 'absolute', top: 0, left: 0, display: 'none' }))
-    expect(hidden.map(found => found.text)).toContain('mina@example.com')
+    // The account's cell is one Button holding its name in its own colour and weight, nothing hidden over it.
+    expect((await ui.find({ key: 'band-account' }))?.type).toBe('Button')
     expect((await ui.find({ key: 'band-account' }))?.text).toBe('mina@example.com')
-    // The name drawn beneath it, then the Button: the cell shows the same text twice in its tree.
-    expect((await ui.find({ key: 'account' }))?.text).toBe('mina@example.commina@example.com')
-    // The context and the usage take no press.
-    for (const key of ['band-context', 'band-usage-5h', 'band-usage-wk']) expect(await ui.find({ key })).toBeUndefined()
-    // The account keeps its colour and weight.
+    expect((await ui.findAll({ type: 'Box' })).filter(found => found.props.display === 'none')).toEqual([])
     const inked = async (text: string) => (await ui.findAll({ type: 'Text', text })).find(found => found.props.color !== undefined)?.props
     expect(await inked('mina@example.com')).toMatchObject({ color: '#87afd7', bold: true })
+    // The context and the usage take no press.
+    for (const key of ['band-context', 'band-usage-5h', 'band-usage-wk']) expect(await ui.find({ key })).toBeUndefined()
     opened.length = 0
     // Taken by the ui.press hook, inside the person's press: the pane is asked for.
     expect(await ui.press({ key: 'band-account' })).toEqual({ element: 'band-account' })
@@ -85,20 +100,17 @@ test('the lines changed are one filled block; with no workspace hook to take it,
     return { text: '' }
   })
   const ui = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-  // The counts on the block's ground, between its half blocks, green and red.
-  // One Button per span, each drawn under the pointer as its span is at rest.
-  expect((await ui.find({ key: 'lines' }))?.text).toBe('▐+3677 -511▌▐+3677 -511▌')
-  const labels = async (key: string) => (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith(key)).map(found => found.text)
-  expect(await labels('band-lines')).toEqual(['▐', '+3677', ' ', '-511', '▌'])
+  // The counts on the block's ground, between its half blocks, green and red: one Button, one press.
+  expect((await ui.find({ key: 'lines' }))?.text).toBe('▐+3677 -511▌')
+  expect((await ui.find({ key: 'band-lines' }))?.text).toBe('▐+3677 -511▌')
   const inked = async (text: string) => (await ui.findAll({ type: 'Text', text })).find(found => found.props.color !== undefined)?.props
   expect(await inked('+3677')).toMatchObject({ color: '#00d787', bold: true, backgroundColor: '#303030' })
   expect(await inked('-511')).toMatchObject({ color: '#ff5f5f', bold: true, backgroundColor: '#303030' })
-  await ui.press({ key: 'band-lines-1' })
+  await ui.press({ key: 'band-lines' })
   expect(ran).toEqual(['sc:workspace toggle diff'])
-  // The place opens the workspace too; its Buttons spell the pill as the face does.
-  expect((await ui.find({ key: 'place' }))?.text).toBe('▐claude-mods▌◇ main▌ #12✔'.repeat(2))
-  expect(await labels('band-place')).toEqual(['▐', 'claude-mods', '▌', '◇ main', '▌', ' #12', '✔'])
-  await ui.press({ key: 'band-place-1' })
+  // The place opens the workspace too, the pill and the PR in one Button.
+  expect((await ui.find({ key: 'band-place' }))?.text).toBe('▐claude-mods▌◇ main▌ #12✔')
+  await ui.press({ key: 'band-place' })
   expect(ran).toEqual(['sc:workspace toggle diff', 'sc:workspace toggle diff'])
   await ui.unmount()
 })
@@ -116,7 +128,8 @@ test('with the status line command\'s forward, the band shows its line above the
     expect(await ui.find({ key: 'status-row-0' })).toBeDefined()
     expect(await ui.find({ key: 'status-row-1' })).toBeUndefined()
     // The context is a gauge like the usage bars: a label, thin bar cells, the percentage.
-    expect(await ui.find({ type: 'Text', text: '▐ctx ━━━━━━ 50%▌' })).toBeDefined()
+    // Rounded off by half blocks on the cell grid, by spaces of its ground elsewhere.
+    expect(await ui.find({ type: 'Text', text: surface === 'terminal' ? '▐ctx ━━━━━━ 50%▌' : ' ctx ━━━━━━ 50% ' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' 50%' })).toBeDefined()
     // The place sits at the end, right before the lines changed.
     expect(row.indexOf('45%')).toBeGreaterThan(-1)
@@ -149,15 +162,25 @@ test('with showStatusBand off, the band is left to the engine', { options: { sho
   await ui.unmount()
 })
 
-test('a pressable span\'s Button, revealed under the pointer, draws as the span does and never inverts', async () => {
-  expect(pressedLook({ text: 'mina@example.com', color: '#87afd7', bold: true })).toEqual({ inverse: false, color: '#87afd7', bold: true })
-  expect(pressedLook({ text: '+3', color: '#00d787', backgroundColor: '#303030', bold: true })).toEqual({ inverse: false, color: '#00d787', backgroundColor: '#303030', bold: true })
-  expect(pressedLook({ text: ' ' })).toEqual({ inverse: false })
-  // Nothing the face lacks: no underline.
+test('a span\'s look carries only what the span sets', async () => {
+  expect(look({ text: '+3', color: '#00d787', backgroundColor: '#303030', bold: true })).toEqual({ color: '#00d787', backgroundColor: '#303030', bold: true })
+  // Nothing the span lacks: no underline.
   expect(look({ text: 'x', dimColor: true })).toEqual({ dimColor: true })
 })
 
-test('any Button of the account cell opens the pane, the stale mark beside the name included', async ($, on) => {
+test('off the cell grid the place, the lines and the toolbox are one Button each; pills and grounds open and close on spaces, no half block', async ($, on) => {
+  seedState(on, { status: STATUS })
+  const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } as never
+  const ui = await $.ui.mount({ plugin: 'sc-accounts', surface: 'desktop', component: 'AbovePrompt', props })
+  expect((await ui.find({ key: 'band-place' }))?.text).toBe(' claude-mods ◇ main  #12✔')
+  expect((await ui.find({ key: 'band-lines' }))?.text).toBe(' +3 -1 ')
+  expect((await ui.find({ key: 'band-toolbox' }))?.text).toBe(' ⚒ Toolbox ')
+  expect(await ui.find({ type: 'Text', text: /[▐▌]/ })).toBeUndefined()
+  expect((await ui.find({ key: 'status-cell-model' }))?.text).toMatch(/^ Opus5\.5 .* $/)
+  await ui.unmount()
+})
+
+test('the account\'s Button opens the pane, the stale mark beside the name inside it', async ($, on) => {
   seedState(on, { usage: { u1: { limits: [{ label: '5h', percent: 30 }], fetchedAt: 0, isStale: true, source: 'lookup' } } })
   on('ui.panes', () => ({ value: [] as never }))
   const opened: string[] = []
@@ -166,8 +189,8 @@ test('any Button of the account cell opens the pane, the stale mark beside the n
     return { value: { isPlaced: true } as never }
   })
   const ui = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: bandProps(160) })
-  expect((await ui.find({ key: 'band-account-1' }))?.text).toBe(' ◷')
-  expect(await ui.press({ key: 'band-account-1' })).toEqual({ element: 'band-account-1' })
+  expect((await ui.find({ key: 'band-account' }))?.text).toBe('mina@example.com ◷')
+  expect(await ui.press({ key: 'band-account' })).toEqual({ element: 'band-account' })
   expect(opened).toEqual(['account-switch'])
   await ui.unmount()
 })

@@ -67,6 +67,9 @@ export function seedState(on: On, extra: Record<string, unknown>, now?: number):
   on('session.id', () => ({ value: 'this-session' as never }))
   // The session's own context reading.
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000, percent: 40 }, rateLimits: [] } as never }))
+  // The process environment: a home, and what the test adds (`env`), such as the account the app signs the session in with.
+  const env: Record<string, string> = { HOME: '/home/me', ...(extra.env as Record<string, string> | undefined) }
+  on('env.get', ($, e) => ({ value: env[e.name] as never }))
   mock.clock(on, (now === undefined ? undefined : { now }) as never)
 }
 

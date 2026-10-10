@@ -6,7 +6,7 @@ import type { Locale } from '../i18n'
 import { ansiHex, contextLabelColor, contextScaled, modelPill, pillWidth, placePill, reviewMark } from '../statusline'
 import type { PillSegment } from '../statusline'
 import { STALE_MARK } from './accounts'
-import { countdownTone, Rule, theme } from '../shared/kit'
+import { countdownTone, isCellGrid, Rule, theme } from '../shared/kit'
 
 // ui-check: raw-colours - the band redraws the status line's own ANSI colours, which are data here, not theme.
 
@@ -37,7 +37,7 @@ export function toolboxCell(counts: { running: number; waiting: number; failed: 
 /** Cells between two cells of the band's status line. */
 const STATUS_GAP = 1
 
-/** A span's look as Text props, so a face and a Button's hover draw it alike. */
+/** A span's look as Text props. */
 export function look(span: BandSpan) {
   return {
     ...(span.color ? { color: span.color } : {}),
@@ -45,11 +45,6 @@ export function look(span: BandSpan) {
     ...(span.bold ? { bold: true as const } : {}),
     ...(span.dimColor ? { dimColor: true as const } : {}),
   }
-}
-
-/** A span's Button hover: the span's own look, never the inversion a Button takes under the pointer. */
-export function pressedLook(span: BandSpan) {
-  return { inverse: false, ...look(span) }
 }
 
 export type BandModel = {
@@ -76,6 +71,8 @@ export type BandModel = {
 export function StatusBand(ui: ElementTable, model: BandModel) {
   const { Box, Button, Text } = ui
   const { status, account, reading, windows, contextUsed, now, locale, room, onPress } = model
+  // On the cell grid: rows packed to `room` under a rule. Elsewhere one row the surface wraps.
+  const isGrid = isCellGrid(ui)
   /** Spans drawn in their own colours. */
   const drawSpans = (key: string, spans: BandSpan[]): RenderElement => (
     <Text key={key}>
@@ -87,34 +84,39 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     </Text>
   )
   /**
-   * A cell that toggles `target` when pressed, drawn from spans in their own
-   * colours. Only a Button press counts as the person asking, which places a
-   * pane at any width, and a Button takes no colour at rest; so over the face
-   * lies a row of Buttons, one per span, hidden until the pointer is on the
-   * cell. Each Button's hover is its span's look and never inverts, so the
-   * revealed row draws exactly as the face does, and takes the press.
+   * A cell that toggles `target` when pressed: one Button holding the spans as
+   * Text in their own colours, all of them one press. Only a Button press counts
+   * as the person asking, which places a pane at any width.
    */
   const pressCell = (key: string, target: BandTarget, spans: BandSpan[]): RenderElement => (
     <Box key={key}>
-      {drawSpans(`${key}-face`, spans)}
-      {/* Unkeyed, so the hover that reveals it is the cell's. */}
-      <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex' }}>
+      <Button key={`band-${key}`} plain onPress={() => onPress(target)}>
         {spans
           .filter(span => span.text !== '')
           .map((span, index) => (
-            <Button
-              key={index === 0 ? `band-${key}` : `band-${key}-${index}`}
-              label={span.text}
-              plain
-              hover={pressedLook(span)}
-              onPress={() => onPress(target)}
-            />
+            <Text key={`${key}-${index}`} {...look(span)}>
+              {span.text}
+            </Text>
           ))}
-      </Box>
+      </Button>
     </Box>
   )
-  /** A pill as spans: a half block, each segment on its ground, the half block after it. */
-  const pillSpans = (segments: PillSegment[]): BandSpan[] => [
+  /**
+   * A pill as spans: on the cell grid a half block, each segment on its ground,
+   * the half block after it. Elsewhere a font's half block neither fills the line
+   * nor meets the ground beside it, so each segment opens with a space on its
+   * ground and the last closes with one.
+   */
+  const pillSpans = (segments: PillSegment[]): BandSpan[] =>
+    isGrid
+      ? gridPillSpans(segments)
+      : segments.map((segment, index) => ({
+          text: ` ${segment.text}${index === segments.length - 1 ? ' ' : ''}`,
+          color: ansiHex(segment.fg),
+          backgroundColor: ansiHex(segment.bg),
+          ...(segment.bold ? { bold: true } : {}),
+        }))
+  const gridPillSpans = (segments: PillSegment[]): BandSpan[] => [
     { text: '▐', color: ansiHex(segments[0]?.bg ?? 0) },
     ...segments.flatMap((segment, index) => {
       const after = segments[index + 1]
@@ -126,7 +128,26 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     }),
   ]
 
-  const drawPill = (key: string, segments: PillSegment[]) => (
+  const drawPill = (key: string, segments: PillSegment[]) => (isGrid ? drawGridPill(key, segments) : drawSpacedPill(key, segments))
+  /** A pill off the cell grid: each segment on its ground between spaces of that ground, as `pillSpans` lays them. */
+  const drawSpacedPill = (key: string, segments: PillSegment[]) => (
+    <Text key={key}>
+      {segments.map((segment, index) => (
+        <Text key={`${key}-${index}`} backgroundColor={ansiHex(segment.bg)} color={ansiHex(segment.fg)} bold={segment.bold === true}>
+          {' '}
+          {segment.letters
+            ? segment.letters.map((letter, at) => (
+                <Text key={`${key}-${index}-${at}`} color={ansiHex(letter.fg)}>
+                  {letter.char}
+                </Text>
+              ))
+            : segment.text}
+          {index === segments.length - 1 ? ' ' : ''}
+        </Text>
+      ))}
+    </Text>
+  )
+  const drawGridPill = (key: string, segments: PillSegment[]) => (
     <Text key={key}>
       <Text color={ansiHex(segments[0]?.bg ?? 0)}>▐</Text>
       {segments.map((segment, index) => {
@@ -157,11 +178,11 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
   )
 
   type Cell = { key: string; width: number; draw: () => RenderElement }
-  /** A filled cell: its spans on one ground, rounded off by half blocks. */
+  /** A filled cell: its spans on one ground, rounded off by half blocks on the cell grid and by spaces of the ground elsewhere. */
   const onGround = (ground: string, spans: BandSpan[]): BandSpan[] => [
-    { text: '▐', color: ground },
+    isGrid ? { text: '▐', color: ground } : { text: ' ', backgroundColor: ground },
     ...spans.map(span => ({ ...span, backgroundColor: ground })),
-    { text: '▌', color: ground },
+    isGrid ? { text: '▌', color: ground } : { text: ' ', backgroundColor: ground },
   ]
   const first: Cell[] = []
   // The context gauge is built here and placed beside the usage windows below.
@@ -291,6 +312,19 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     ...first.filter(cell => cell.key !== 'context'),
     ...(firstUsage < 0 ? [...second, ...context] : [...second.slice(0, firstUsage), ...context, ...second.slice(firstUsage)]),
   ]
+  // A remote surface frames the band itself and measures its own font: one row it wraps
+  // whole cells of, under no rule.
+  if (!isGrid) {
+    return (
+      <Box key="status-row-0" flexWrap="wrap" columnGap={STATUS_GAP}>
+        {cells.map(cell => (
+          <Box key={`status-cell-${cell.key}`} flexShrink={0}>
+            {cell.draw()}
+          </Box>
+        ))}
+      </Box>
+    )
+  }
   const rows = packRows(cells, room, STATUS_GAP).map((row, index) => (
     <Box key={`status-row-${index}`} gap={STATUS_GAP}>
       {row.map(cell => cell.draw())}

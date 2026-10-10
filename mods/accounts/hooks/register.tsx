@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentSpawnInput, EngineInterface, Register } from 'claude-code'
 
-import { USAGE_KEY, syncLive, tickOrca } from './accounts'
+import { USAGE_KEY, hostAccount, syncLive, tickOrca } from './accounts'
 import type { AccountsContext } from './accounts'
 import { agentDefinitionNamed, agentLabel } from './agentModels'
 import { TYPES as CODEX_TYPES, codexInstalled, specsOf as codexAgentSpecs } from './codex/agents'
@@ -31,6 +31,7 @@ import { collectStatus, countLines, noteEffortCommand, noteRequestEffort, startS
 import type { StatusContext } from './sessionStatus'
 import { LATEST_RELEASE_KEY, RELEASE_CHECK_MS, latestReleaseUrl, latestVersion } from './shared/release'
 import type { RunningRelease } from './shared/release'
+import { surfaceTable } from './shared/kit'
 import { isBesideOtherPanes } from './shared/panes'
 import { editedPath, lineChanges } from './status'
 import type { EffortSettings } from './status'
@@ -75,7 +76,7 @@ const TAB_LABEL = 'Accounts'
 const PLUGIN = 'sc-accounts'
 /** The plugin `sc` declares /sc:accounts in `commands/accounts.md`; this hook answers it. */
 const COMMAND = 'sc:accounts'
-/** The band cell that toggles the accounts pane, the live account's name: `band-account`, then one Button per further coloured run. */
+/** The band cell that toggles the accounts pane: the Button holding the session account's name. */
 const BAND_ACCOUNT = 'band-account'
 /** The `/config` row of the plugin's `showStatusBand` setting. */
 const BAND_SETTING = 'sc-accounts.showStatusBand'
@@ -103,10 +104,6 @@ let hostname: string | null = null
 let engineVersion: string | null = null
 /** The effort of each loop's latest request, by agent id; '' is the main loop. */
 const requestEfforts = new Map<string, string>()
-
-function isAccountCell(element: string): boolean {
-  return element === BAND_ACCOUNT || element.startsWith(`${BAND_ACCOUNT}-`)
-}
 
 function debugLog($: EngineInterface, error: unknown): void {
   $.ui.log(`account-switch: ${message(error)}`, { to: 'debug' })
@@ -137,6 +134,10 @@ function variable($: EngineInterface, name: EnvName): Promise<string | undefined
       return $.env.get('APPDATA')
     case 'CODEX_HOME':
       return $.env.get('CODEX_HOME')
+    case 'CLAUDE_CODE_ACCOUNT_UUID':
+      return $.env.get('CLAUDE_CODE_ACCOUNT_UUID')
+    case 'CLAUDE_CODE_USER_EMAIL':
+      return $.env.get('CLAUDE_CODE_USER_EMAIL')
   }
 }
 
@@ -660,14 +661,17 @@ export const register: Register = (on, options) => {
     const band = await (async () => {
       if (e.props.hasSurvey || !isBandShown) return next(e)
       const status = await read($, statusInfo)
-      const liveUuid = await read($, live)
-      const account = (await read($, accounts)).find(one => one.uuid === liveUuid)
-      const reading = liveUuid ? (await read($, usage))[liveUuid] : undefined
+      // The account this session's requests go out under: the app's own where the app runs it.
+      const host = await hostAccount(machine($))
+      const sessionUuid = host?.uuid ?? (await read($, live))
+      const account =
+        (await read($, accounts)).find(one => one.uuid === sessionUuid) ?? (host?.email ? { uuid: host.uuid, email: host.email, savedAt: 0 } : undefined)
+      const reading = sessionUuid ? (await read($, usage))[sessionUuid] : undefined
       const windows = (reading?.limits ?? []).filter(limit => limit.label === '5h' || limit.label === 'wk')
       const contextUsed = (await $.session.usage()).context.percent ?? status?.contextUsed ?? null
       if (!status && contextUsed === null && (!account || windows.length === 0)) return next(e)
 
-      return StatusBand($.ui.resolve(e), {
+      return StatusBand(surfaceTable($.ui.resolve(e), e.surface), {
         status,
         account,
         reading,
@@ -691,13 +695,13 @@ export const register: Register = (on, options) => {
       return next(e)
     })
 
-    return reply ? CodexReplyBand($.ui.resolve(e), reply, band) : band
+    return reply ? CodexReplyBand(surfaceTable($.ui.resolve(e), e.surface), reply, band) : band
   })
 
   // A band press is taken here, inside the person's press, and toggled before the chain
   // settles: a pane opened there counts as asked for and is placed at any width.
   on('ui.press', async ($, e, next) => {
-    if (e.plugin !== PLUGIN || e.component !== 'AbovePrompt' || !isAccountCell(e.element)) return next(e)
+    if (e.plugin !== PLUGIN || e.component !== 'AbovePrompt' || e.element !== BAND_ACCOUNT) return next(e)
     await toggle(paneContext($), 'accounts')
 
     return { element: e.element }
@@ -730,6 +734,6 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const pane = paneContext($)
 
-    return AccountsPane($.ui.resolve(e), await paneModel(pane, e.props.bodyColumns ?? 60, e.surface !== 'mobile'), paneActions(pane))
+    return AccountsPane(surfaceTable($.ui.resolve(e), e.surface), await paneModel(pane, e.props.bodyColumns ?? 60, e.surface !== 'mobile'), paneActions(pane))
   })
 }

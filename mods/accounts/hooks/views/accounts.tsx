@@ -4,7 +4,7 @@ import type { AccountView, CodexAccountView, LimitView, UsageView } from '../../
 import { moneyText } from '../anthropic'
 import { bar, displayWidth, formatDuration, groupDecimal, isSameReset, packRows, resetCountdown, resetText } from '../format'
 import type { Locale, Messages } from '../i18n'
-import { Badge, Card, CARD_CHROME, CELL_GAP, countdownTone, Empty, Gauge, GAUGE_WIDTH, IconButton, theme, TileButton, Toned } from '../shared/kit'
+import { Badge, Card, CARD_CHROME, CELL_GAP, countdownTone, Empty, Gauge, GAUGE_WIDTH, IconButton, isCellGrid, theme, TileButton, Toned } from '../shared/kit'
 
 export const STALE_MARK = '◷'
 /** The product the Codex card is for, as its name is written. */
@@ -12,7 +12,10 @@ const CODEX_NAME = 'Codex'
 
 export type AccountsModel = {
   list: AccountView[]
+  /** Claude Code's login on this machine, which a switch changes. */
   liveUuid: string | null
+  /** The account this session's requests go out under: the app's own where the app runs the session. */
+  sessionUuid: string | null
   readings: Record<string, UsageView>
   /** The Codex account this session's Codex uses; null where the Codex CLI does not run, and no card is drawn. */
   codex: CodexAccountView | null
@@ -86,6 +89,19 @@ type LimitCell = ReturnType<typeof limitCells>[number]
 function LimitRows(ui: ElementTable, id: string, cells: LimitCell[], slot: number, room: number) {
   const { Box } = ui
   const spanOf = (count: number) => count * slot + CELL_GAP * (count - 1)
+  // Off the cell grid the surface measures its own font: the cells share one row it wraps whole.
+  if (!isCellGrid(ui)) {
+    return [
+      <Box key={`${id}-limits-0`} flexWrap="wrap" columnGap={CELL_GAP} rowGap={1}>
+        {cells.map(({ group, foot, near }) => (
+          <Box key={`${id}-${group[0]?.label}`} flexDirection="column" flexShrink={0}>
+            <Box gap={CELL_GAP}>{group.map(limit => Gauge(ui, `${id}-${limit.label}`, limit.label, limit.percent, undefined, near))}</Box>
+            {foot !== '' && Toned(ui, `${id}-${group[0]?.label}-reset`, foot, near, near ? { isBold: true } : { isDim: true })}
+          </Box>
+        ))}
+      </Box>,
+    ]
+  }
 
   return packRows(
     cells.map(cell => ({ ...cell, width: spanOf(cell.group.length) })),
@@ -158,7 +174,7 @@ function CodexCard(ui: ElementTable, codex: CodexAccountView, cells: LimitCell[]
 
 export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: AccountsActions) {
   const { Box, Text } = ui
-  const { list, liveUuid, readings, now, locale, m } = model
+  const { list, liveUuid, sessionUuid, readings, now, locale, m } = model
   // The card's border and padding take CARD_CHROME cells, the limits' indent two more.
   const room = Math.max(20, model.bodyColumns - CARD_CHROME - 2)
   // One gauge width for every card, so the columns line up across them.
@@ -172,20 +188,24 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
       {list.map(one => {
         const reading = readings[one.uuid]
         const isLive = one.uuid === liveUuid
+        // The account in use is this session's: the app's own where the app runs it, else the live login.
+        const isInUse = one.uuid === sessionUuid
+        const isHostOnly = isInUse && !isLive
         const updated = updatedText(reading, now, m)
 
         return Card(
           ui,
           `row-${one.uuid}`,
-          isLive,
+          isInUse,
           <Box flexDirection="column">
             <Box justifyContent="space-between">
               <Text>
-                {Toned(ui, `live-${one.uuid}`, isLive ? '● ' : '○ ', isLive ? 'accent' : undefined, { isDim: !isLive })}
-                {/* The account in use reads in the colour of its Active badge. */}
-                {Toned(ui, `email-${one.uuid}`, one.email, isLive ? 'accent' : undefined, { isBold: isLive })}
-                {isLive && <Text> </Text>}
+                {Toned(ui, `live-${one.uuid}`, isInUse ? '● ' : '○ ', isInUse ? 'accent' : undefined, { isDim: !isInUse })}
+                {/* The account in use reads in the colour of its badge. */}
+                {Toned(ui, `email-${one.uuid}`, one.email, isInUse ? 'accent' : undefined, { isBold: isInUse })}
+                {(isLive || isHostOnly) && <Text> </Text>}
                 {isLive && Badge(ui, `active-${one.uuid}`, m.active)}
+                {isHostOnly && Badge(ui, `session-${one.uuid}`, m.thisSession)}
                 {reading?.isStale && Toned(ui, `stale-${one.uuid}`, ` ${STALE_MARK}`, 'stale', { isDim: true })}
                 {updated !== '' && <Text dimColor>{`  ${updated}`}</Text>}
               </Text>
@@ -198,6 +218,8 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               )}
             </Box>
             <Box flexDirection="column" paddingLeft={2}>
+              {/* The app signs this session in itself: a switch here changes the machine's login, not this session's. */}
+              {isHostOnly && Toned(ui, `session-note-${one.uuid}`, m.hostAccountNote, undefined, { isDim: true, wrap: 'wrap' })}
               {LimitRows(ui, one.uuid, cellsOf.get(one.uuid) ?? [], slot, room)}
               {!reading && <Text dimColor>{m.loading}</Text>}
               {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger')}

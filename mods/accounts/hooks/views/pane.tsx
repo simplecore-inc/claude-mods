@@ -43,6 +43,8 @@ export type PaneModel = {
   tab: AccountsTabKey
   accounts: AccountView[]
   liveUuid: string | null
+  /** The account this session's requests go out under: the host's where the app runs it, else the live one. */
+  sessionUuid: string | null
   readings: Record<string, UsageView>
   /** The Codex account this session's Codex uses; null where the Codex CLI does not run. */
   codex: CodexAccountView | null
@@ -208,6 +210,7 @@ export function AccountsPane(ui: ElementTable, model: PaneModel, actions: PaneAc
         {
           list: model.accounts,
           liveUuid: model.liveUuid,
+          sessionUuid: model.sessionUuid,
           readings: model.readings,
           codex: model.codex,
           isGuideShown: model.isGuideShown,

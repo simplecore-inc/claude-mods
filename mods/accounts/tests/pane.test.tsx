@@ -12,23 +12,34 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     expect((await ui.find({ key: 'row-u1' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan' })
     expect((await ui.find({ key: 'row-u2' }))?.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
     expect(await ui.find({ key: 'remove-u2' })).toBeDefined()
-    // Switching is a filled button with a word, not a glyph.
+    // Switching is a filled button with a word, not a glyph: on the main tile's tint on the terminal,
+    // the surface's own primary button elsewhere.
     expect((await ui.find({ key: 'use-u2' }))?.text).toBe('Switch')
-    expect((await ui.find({ key: 'use-u2-tile' }))?.props).toMatchObject({ paddingX: 1, backgroundColor: '#1f4650' })
+    if (surface === 'terminal') expect((await ui.find({ key: 'use-u2-tile' }))?.props).toMatchObject({ paddingX: 1, backgroundColor: '#1f4650' })
+    else expect((await ui.find({ key: 'use-u2' }))?.props).toMatchObject({ variant: 'primary' })
     expect((await ui.find({ key: 'remove-u2' }))?.text).toBe('✕')
     expect(await ui.find({ key: 'use-u1' })).toBeUndefined()
     // The account in use reads in its Active badge's colour; the others in the plain one.
     expect((await ui.findAll({ type: 'Text', text: 'mina@example.com' })).some(found => found.props.color === 'cyan' && found.props.bold === true)).toBe(true)
     expect((await ui.findAll({ type: 'Text', text: 'jun@example.org' })).some(found => found.props.color !== undefined)).toBe(false)
-    // The footer splits into equal filled tiles, one button in each; Close is in the header.
+    // The footer splits into equal filled tiles, one button in each; Close is in the header on the terminal
+    // and in the surface's own title bar elsewhere.
     expect(await ui.find({ key: 'tile-close' })).toBeUndefined()
-    expect(await ui.find({ key: 'header-exit-ground' })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ key: 'header-exit-ground' })).toBeDefined()
+    else expect(await ui.find({ key: 'close' })).toBeUndefined()
     for (const key of ['refresh', 'add', 'webhook']) {
-      // One row tall: a filled tile with no border.
+      // One row tall: a filled tile with no border on the terminal; elsewhere the surface's own
+      // button growing to share the row, no width counted in cells.
       const tile = (await ui.find({ key: `tile-${key}` }))?.props
-      expect(tile).toMatchObject({ width: 39 })
       expect(tile?.borderStyle).toBeUndefined()
-      expect(tile?.backgroundColor).toBeDefined()
+      if (surface === 'terminal') {
+        expect(tile).toMatchObject({ width: 39 })
+        expect(tile?.backgroundColor).toBeDefined()
+      } else {
+        expect(tile).toMatchObject({ flexGrow: 1 })
+        expect(tile?.width).toBeUndefined()
+        expect(tile?.backgroundColor).toBeUndefined()
+      }
       expect(await ui.find({ key })).toBeDefined()
       // Words alone: no glyph ahead of the label, no hotkey drawn beside it.
       expect((await ui.find({ key }))?.text).toMatch(/^[\p{L} ]+$/u)
@@ -89,6 +100,16 @@ test('limit columns move to a new row only when the pane is too narrow', async (
   const narrow = await mountPane($, 'terminal', 40)
   expect(await narrow.find({ key: 'u1-limits-1' })).toBeDefined()
   await narrow.unmount()
+  // Off the terminal one row the surface wraps, its cells kept whole and no width counted in cells.
+  const desktop = await mountPane($, 'desktop', 40)
+  const row = await desktop.find({ key: 'u1-limits-0' })
+  expect(row?.props).toMatchObject({ flexWrap: 'wrap' })
+  expect(await desktop.find({ key: 'u1-limits-1' })).toBeUndefined()
+  for (const label of ['5h', 'wk']) {
+    expect((await desktop.find({ key: `u1-${label}` }))?.props).toMatchObject({ flexShrink: 0 })
+    expect((await desktop.find({ key: `u1-${label}` }))?.props.width).toBeUndefined()
+  }
+  await desktop.unmount()
 })
 
 test('each account with figures says how long ago they were looked up', async ($, on) => {
@@ -163,7 +184,6 @@ for (const [who, configured, isFiled] of [
     // The turn starts after the live account last changed (at 0), as a turn after a switch does.
     seedState(on, {}, 60_000)
     // Stand for the engine beneath: Claude Code's config names the login its requests use.
-    on('env.get', ($, e) => ({ value: (e.name === 'HOME' ? '/home/me' : undefined) as never }))
     on('fs.read', () => ({ value: JSON.stringify({ oauthAccount: { accountUuid: configured, emailAddress: 'x@example.com' } }) as never }))
     const stored: string[] = []
     on('store.set', ($, e) => {
@@ -279,5 +299,21 @@ test('an account whose login Orca keeps out of reach says why its figures age, w
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Text', text: 'Orca keeps this login where sc-accounts cannot refresh it, so the figures are looked up again once the account is in use.' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /expired/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('off the terminal the tabs are the surface\'s own buttons, the selected one primary, its badge inside it; the pane closes from the surface\'s title bar', async ($, on) => {
+  seedState(on, {})
+  const ui = await mountPane($, 'desktop')
+  const tabs = (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('tab-button-'))
+  expect(tabs.map(tab => [tab.key, tab.props.variant])).toEqual([
+    ['tab-button-accounts', 'primary'],
+    ['tab-button-usage', undefined],
+    ['tab-button-storage', undefined],
+  ])
+  expect(tabs[0]?.text).toBe('Accounts 3')
+  // No fill behind them, and no close button of the pane's own.
+  expect((await ui.find({ key: 'tab-accounts' }))?.props.backgroundColor).toBeUndefined()
+  expect(await ui.find({ key: 'close' })).toBeUndefined()
   await ui.unmount()
 })

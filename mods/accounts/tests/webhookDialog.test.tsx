@@ -19,7 +19,6 @@ test('the webhook dialog: the switch, the method, the URL, the token, the templa
   on('fs.read', () => ({ value: '{"session_id": "{{session}}", "ctx": "{{context}}"}' as never }))
   on('session.model', () => ({ value: 'claude-opus-5-5' as never }))
   on('session.cwd', () => ({ value: '/work/claude-mods' as never }))
-  on('env.get', ($, e) => ({ value: (e.name === 'HOME' ? '/home/me' : undefined) as never }))
   const ui = await mountPane($, 'terminal')
   expect(await ui.find({ type: 'Text', text: 'Webhook' })).toBeDefined()
   expect((await ui.find({ key: 'webhook-enabled-on' }))?.text).toBe('On')
@@ -57,7 +56,6 @@ test('under the last send the webhook dialog says what the receiver answered, cu
   on('fs.read', () => ({ value: '{"ctx": "{{context}}"}' as never }))
   on('session.model', () => ({ value: 'claude-opus-5-5' as never }))
   on('session.cwd', () => ({ value: '/work/claude-mods' as never }))
-  on('env.get', ($, e) => ({ value: (e.name === 'HOME' ? '/home/me' : undefined) as never }))
   const ui = await mountPane($, 'terminal')
   // HTTP 200 reads as sent; the answer beneath says the receiver stored nothing.
   expect(await ui.find({ type: 'Text', text: /^Sent at .+: HTTP 200$/ })).toBeDefined()

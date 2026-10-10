@@ -1,7 +1,7 @@
 import type { UsageView } from '../types'
 import { AnthropicError, USAGE_URL, failedReading, heldReading, lookedUpOnly, needsRefresh, parseSpend, parseUsage, usageInit, withMeasured } from './anthropic'
 import type { MeasuredWindow } from './anthropic'
-import { USAGE_KEY, exclusive, figuresTrustedFrom, isLiveTokenOf, oauthAccountKey, organizationOf, savedIds, syncLive } from './accounts'
+import { USAGE_KEY, exclusive, figuresTrustedFrom, hostAccount, isLiveTokenOf, oauthAccountKey, organizationOf, savedIds, syncLive } from './accounts'
 import type { AccountsContext } from './accounts'
 import { REFRESH_TIMEOUT_MS, ensureFresh, liveOauthAccount, readLiveCredential, readVault, refreshOrcaCopy } from './credentials'
 import type { OauthAccount } from './credentials'
@@ -189,17 +189,21 @@ export async function refreshAll(ctx: AccountsContext, isAsked: boolean): Promis
 }
 
 /**
- * Keeps the live account's five-hour and weekly figures equal to the ones
+ * Keeps the session account's five-hour and weekly figures equal to the ones
  * this session's latest response reported, which need no lookup and no rate
- * limit. Only once a turn has begun since the live account last changed:
- * before that, the session's figures may be the previous login's. Written
+ * limit. A host's account (`hostAccount`) answers every request; the live
+ * account only once a turn has begun since it last changed: before that, the
+ * session's figures may be the previous login's. Written
  * when they differ from what is shown, or when the shown reading is a minute
  * old, so a figure filed wrongly is put right by the next response.
  */
 export async function adoptSessionFigures(ctx: AccountsContext, windows: readonly MeasuredWindow[], turnStartedAt: number): Promise<void> {
   const { io } = ctx
-  const liveUuid = await ctx.live.get()
-  if (liveUuid === null || turnStartedAt === 0 || turnStartedAt <= (await figuresTrustedFrom(io))) return
+  // A host's account answers this session's requests for the whole session; the live account's only from a turn begun after it last changed.
+  const host = await hostAccount(io)
+  const liveUuid = host?.uuid ?? (await ctx.live.get())
+  if (liveUuid === null) return
+  if (host === null && (turnStartedAt === 0 || turnStartedAt <= (await figuresTrustedFrom(io)))) return
   const measured = windows.filter(window => window.kind === 'five_hour' || window.kind === 'seven_day')
   if (measured.length === 0) return
   const now = await io.now()
@@ -212,8 +216,9 @@ export async function adoptSessionFigures(ctx: AccountsContext, windows: readonl
 }
 
 /**
- * Claude Code's own response reported its windows. They are the live
- * account's only when this turn began after the live account last changed,
+ * Claude Code's own response reported its windows. Where a host signed the
+ * session in, they are the host's account's, never the live account's. Else
+ * they are the live account's only when this turn began after it last changed,
  * and when the login Claude Code is configured with is still the one this
  * session knows: a switch made in another session reaches every session's
  * requests at once but this session's `live` only at its next read, and the
@@ -222,8 +227,12 @@ export async function adoptSessionFigures(ctx: AccountsContext, windows: readonl
  */
 export async function adoptMeasured(ctx: AccountsContext, windows: readonly MeasuredWindow[], turnStartedAt: number): Promise<void> {
   const { io } = ctx
+  if (windows.length === 0) return
+  // A host's account answers this session's requests for the whole session: its figures are its own.
+  const host = await hostAccount(io)
+  if (host !== null) return fileMeasured(ctx, host.uuid, windows)
   const liveUuid = await ctx.live.get()
-  if (liveUuid === null || windows.length === 0) return
+  if (liveUuid === null) return
   const configured = await liveOauthAccount(io).catch((error: unknown) => {
     // An unreadable config names no account: the figures are not filed.
     io.log(message(error))
@@ -237,13 +246,13 @@ export async function adoptMeasured(ctx: AccountsContext, windows: readonly Meas
 
     return
   }
-  if (turnStartedAt > (await figuresTrustedFrom(io))) {
-    const now = await io.now()
-    const reading = withMeasured((await ctx.usage.get())[liveUuid], [...windows], now)
-    await ctx.usage.update(map => ({ ...map, [liveUuid]: reading }))
-    await io.store.set(USAGE_KEY, { ...lookedUpOnly(await io.store.get(USAGE_KEY)), [liveUuid]: reading })
-
-    return
-  }
+  if (turnStartedAt > (await figuresTrustedFrom(io))) return fileMeasured(ctx, liveUuid, windows)
   void refreshLive(ctx).catch((error: unknown) => io.log(message(error)))
+}
+
+/** Files the windows a response reported under `uuid`, the account that answered it. */
+async function fileMeasured(ctx: AccountsContext, uuid: string, windows: readonly MeasuredWindow[]): Promise<void> {
+  const reading = withMeasured((await ctx.usage.get())[uuid], [...windows], await ctx.io.now())
+  await ctx.usage.update(map => ({ ...map, [uuid]: reading }))
+  await ctx.io.store.set(USAGE_KEY, { ...lookedUpOnly(await ctx.io.store.get(USAGE_KEY)), [uuid]: reading })
 }

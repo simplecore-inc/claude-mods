@@ -5,7 +5,7 @@ import type { FsEntry, FsStat, HttpInit, HttpResponse, ProcessRunInit, ProcessRu
  * reads from the literal names at its `$.env.get` calls, so each is read by
  * name in the hooks module and no other may be asked for.
  */
-export type EnvName = 'OS' | 'HOME' | 'USERPROFILE' | 'USER' | 'CLAUDE_CONFIG_DIR' | 'CLAUDE_SECURESTORAGE_CONFIG_DIR' | 'ORCA_USER_DATA_PATH' | 'XDG_CONFIG_HOME' | 'APPDATA' | 'CODEX_HOME'
+export type EnvName = 'OS' | 'HOME' | 'USERPROFILE' | 'USER' | 'CLAUDE_CONFIG_DIR' | 'CLAUDE_SECURESTORAGE_CONFIG_DIR' | 'ORCA_USER_DATA_PATH' | 'XDG_CONFIG_HOME' | 'APPDATA' | 'CODEX_HOME' | 'CLAUDE_CODE_ACCOUNT_UUID' | 'CLAUDE_CODE_USER_EMAIL'
 
 /**
  * What the modules reach the machine through. The hooks module builds each

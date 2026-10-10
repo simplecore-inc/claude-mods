@@ -10,7 +10,7 @@ import { releaseHeader } from './shared/release'
 import { LATEST_RELEASE_KEY, RELEASE_CHECK_MS, latestReleaseUrl, latestVersion } from './shared/release'
 import type { RunningRelease } from './shared/release'
 import { isBesideOtherPanes } from './shared/panes'
-import { Dialog, FormDialog, Header, LogDialog, paneTitle, TabBar, Tiles } from './shared/kit'
+import { Dialog, FormDialog, Header, LogDialog, paneTitle, surfaceTable, TabBar, Tiles } from './shared/kit'
 import type { FormField, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
 import {
@@ -663,7 +663,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const ui = $.ui.resolve(e)
+    const ui = surfaceTable($.ui.resolve(e), e.surface)
     const { Box } = ui
     const bodyColumns = e.props.bodyColumns ?? 60
     const header = {

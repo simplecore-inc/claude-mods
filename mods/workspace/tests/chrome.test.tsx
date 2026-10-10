@@ -114,15 +114,16 @@ test('pressing the accounts band\'s place or lines changed toggles the workspace
   plugins: [
     {
       name: 'sc-accounts',
-      // Stands for the accounts mod: its band, with the lines changed as a Button.
+      // Stands for the accounts mod: its band, the place and the lines changed one Button each, their coloured runs inside.
       register: on => {
         on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-          const { Button } = $.ui.resolve(e)
-          const { Box } = $.ui.resolve(e)
+          const { Box, Button, Text } = $.ui.resolve(e)
           return (
             <Box>
-              <Button key="band-place" label="▐" plain onPress={() => undefined} />
-              <Button key="band-place-1" label="claude-mods" plain onPress={() => undefined} />
+              <Button key="band-place" plain onPress={() => undefined}>
+                <Text color="gray">▐</Text>
+                <Text>claude-mods</Text>
+              </Button>
               <Button key="band-lines" label="+3 -1" plain onPress={() => undefined} />
             </Box>
           )
@@ -146,8 +147,8 @@ test('pressing the accounts band\'s place or lines changed toggles the workspace
   expect(opened).toEqual(['sc-workspace'])
   // The engine's tab row names the pane short, while another pane is open beside it.
   expect(titles).toEqual(['Workspace'])
-  // Any Button of the cell, not only its first: here the directory's name.
-  expect(await band.press({ key: 'band-place-1' })).toEqual({ element: 'band-place-1' })
+  // The place opens it too.
+  expect(await band.press({ key: 'band-place' })).toEqual({ element: 'band-place' })
   expect(opened).toEqual(['sc-workspace', 'sc-workspace'])
   await band.unmount()
 })

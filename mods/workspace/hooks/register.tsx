@@ -14,7 +14,7 @@ import type { ListFiles } from './lists'
 import { messagesFor, resolveLocale } from './i18n'
 import type { Locale, Messages } from './i18n'
 import { isBesideOtherPanes } from './shared/panes'
-import { ChoiceDialog, CodeDialog, Dialog, Header, InputDialog, paneTitle, ReaderDialog, Rule, TabBar, Tiles } from './shared/kit'
+import { ChoiceDialog, CodeDialog, Dialog, Header, InputDialog, paneTitle, ReaderDialog, Rule, surfaceTable, TabBar, Tiles } from './shared/kit'
 import { doneMarks, nextSeq, notesContext, numbered } from './notes'
 import type { DialogLine, Tile } from './shared/kit'
 import { releaseDateOf } from './shared/locale'
@@ -84,16 +84,8 @@ const TAB_LABEL = 'Workspace'
 const COMMAND = 'sc:workspace'
 /** How long after a /clear ends the old session the new one is taken up, once the engine has switched ids. */
 const CLEAR_SETTLE_MS = 300
-/**
- * The accounts mod's band cells, the place and the lines changed, which toggle
- * this pane on its Diff tab. A cell is a row of Buttons, one per coloured run:
- * `band-place`, then `band-place-1`, `band-place-2` and on.
- */
+/** The accounts mod's band cells, the place and the lines changed, which toggle this pane on its Diff tab: one Button each. */
 const BAND = { plugin: 'sc-accounts', cells: ['band-place', 'band-lines'] }
-
-function isBandCell(element: string): boolean {
-  return BAND.cells.some(cell => element === cell || element.startsWith(`${cell}-`))
-}
 /** The `/config` row of the `notesInContext` setting. */
 const NOTES_SETTING = 'sc-workspace.notesInContext'
 const TABS: Tab[] = ['agents', 'checkpoints', 'notes', 'diff', 'memory']
@@ -1198,14 +1190,14 @@ export const register: Register = (on, options) => {
   // The accounts band's place or lines changed, pressed: toggled here, inside the person's
   // press, so the pane counts as asked for and is placed at any width.
   on('ui.press', async ($, e, next) => {
-    if (e.plugin !== BAND.plugin || e.component !== 'AbovePrompt' || !isBandCell(e.element)) return next(e)
+    if (e.plugin !== BAND.plugin || e.component !== 'AbovePrompt' || !BAND.cells.includes(e.element)) return next(e)
     await togglePane($, 'diff')
 
     return { element: e.element }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const ui = $.ui.resolve(e)
+    const ui = surfaceTable($.ui.resolve(e), e.surface)
     const { Box } = ui
     const bodyColumns = e.props.bodyColumns ?? 60
     // A reader page wraps at the pane's width, kept from every draw so a search hit opens at the right page.

@@ -1,5 +1,5 @@
 // Copied from shared/ by scripts/sync.mjs; edit shared/ and run the script.
-import type { ElementTable } from 'claude-code'
+import type { ElementTable, RenderSurface } from 'claude-code'
 
 import { barParts, displayWidth, padCells, printable, severityColor, truncate } from './layout'
 
@@ -75,7 +75,8 @@ export type HeaderInfo = {
   isReleaseOutdated?: boolean
   isUnderTabs: boolean
   columns?: number
-  exit?: { label: string; onPress: () => void }
+  /** The way out: the pane's close, or a dialog's Cancel (`isBack`). */
+  exit?: { label: string; onPress: () => void; isBack?: boolean }
   backLabel?: string
 }
 
@@ -83,13 +84,28 @@ export type HeaderInfo = {
  * A pane's first row: its name at the left and the way out at the right, a
  * filled button that is the first thing scrolled into view however short the
  * terminal is. The release sits before it while the row has room for it,
- * in the warning colour once a later release is published.
+ * in the warning colour once a later release is published. A remote surface
+ * closes the pane from its own title bar, so there the pane's close is not
+ * drawn and only a dialog's Cancel is, as the surface's own button.
  */
 export function Header(ui: ElementTable, header: HeaderInfo) {
   const { Box, Button, Text } = ui
   const brand = printable(header.brand)
   const release = header.release === undefined ? undefined : printable(header.release)
   const exit = header.exit ? { ...header.exit, label: printable(header.exit.label) } : undefined
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key="header" justifyContent="space-between" alignItems="center" marginTop={header.isUnderTabs ? 1 : 0}>
+        <Text bold wrap="truncate-end">
+          {brand}
+        </Text>
+        <Box gap={2} flexShrink={0} alignItems="center">
+          {release !== undefined && (header.isReleaseOutdated ? <Text color={theme.warn}>{release}</Text> : <Text dimColor>{release}</Text>)}
+          {exit?.isBack && <Button key="close" label={exit.label} onPress={exit.onPress} />}
+        </Box>
+      </Box>
+    )
+  }
   const exitWidth = exit ? displayWidth(exit.label) + 2 : 0
   const room = (header.columns ?? 80) - displayWidth(brand) - exitWidth - 2
   const isReleaseShown = release !== undefined && displayWidth(release) <= room
@@ -113,12 +129,31 @@ export function Header(ui: ElementTable, header: HeaderInfo) {
 
 /** The header a dialog draws: the pane's, its way out being the dialog's own Cancel. */
 export function dialogHeader(header: HeaderInfo, cancel: () => void): HeaderInfo {
-  return { ...header, exit: { label: header.backLabel ?? '←', onPress: cancel } }
+  return { ...header, exit: { label: header.backLabel ?? '←', onPress: cancel, isBack: true } }
 }
 
 /** The tab bar: the selected tab filled, the others dim; a digit presses each. */
 export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSelect: (key: string) => void) {
   const { Box, Button, Text } = ui
+  // A remote surface's own buttons: the selected tab in its primary look, the badge inside the button.
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key="tabs" columnGap={1} rowGap={1} flexWrap="wrap">
+        {tabs.map(tab => {
+          const isActive = tab.key === active
+
+          return (
+            <Box key={`tab-${tab.key}`} flexShrink={0}>
+              <Button key={`tab-button-${tab.key}`} hotkey={tab.hotkey} {...(isActive ? { variant: 'primary' as const } : {})} onPress={() => onSelect(tab.key)}>
+                {printable(tab.label)}
+                {tab.badge && <Text color={isActive ? undefined : theme.accent}>{` ${printable(tab.badge)}`}</Text>}
+              </Button>
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  }
 
   return (
     // A tab never wraps inside: on a narrow pane the next tab moves to a new row.
@@ -151,7 +186,34 @@ export function TabBar(ui: ElementTable, tabs: TabSpec[], active: string, onSele
   )
 }
 
-/** A dim rule across `width` cells, under the tab bar. */
+/** Where a kit table carries the surface it draws on. */
+const SURFACE = Symbol('surface')
+
+/**
+ * The element table a hook draws with, carrying `e.surface` for the kit:
+ * `surfaceTable($.ui.resolve(e), e.surface)`. Every surface's table holds
+ * every element at run time, so the table alone cannot tell them apart.
+ */
+export function surfaceTable<T extends ElementTable>(table: T, surface: RenderSurface): T {
+  return Object.assign(Object.create(null) as object, table, { [SURFACE]: surface }) as T
+}
+
+/**
+ * Whether the table draws on the terminal's cell grid. A remote surface (the
+ * desktop, the editor, the phone) draws Text in its own font and a Button as
+ * its own native control, so a run measured in cells (a rule, a bar, rows
+ * packed to `bodyColumns`, a tile's width) comes out wider or narrower than
+ * counted, and a fill behind a Button frames its chrome twice. There the kit
+ * leaves widths and wrapping to the surface and draws no rule. A table not
+ * made by `surfaceTable` counts as the terminal's.
+ */
+export function isCellGrid(ui: ElementTable): boolean {
+  const surface = (ui as ElementTable & { [SURFACE]?: RenderSurface })[SURFACE]
+
+  return surface === undefined || surface === 'terminal'
+}
+
+/** A dim rule across `width` cells; on a cell grid only (`isCellGrid`), as elsewhere the run wraps. */
 export function Rule(ui: ElementTable, key: string, width: number) {
   const { Text } = ui
 
@@ -306,8 +368,20 @@ export function Gauge(ui: ElementTable, key: string, label: string, percent: num
  * neutral fill. One cell wide, as the glyph alone.
  */
 export function IconButton(ui: ElementTable, key: string, glyph: string, tone: string, onPress: () => void, isOff = false) {
-  const { Box, Button } = ui
+  const { Box, Button, Text } = ui
   const ground = isOff ? theme.tile : (GLYPH_GROUND[tone] ?? theme.tile)
+  // A remote surface's own button, the glyph in its tone (dim while a switch is off).
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key={`${key}-ground`} flexShrink={0}>
+        <Button key={key} onPress={onPress}>
+          <Text color={tone} dimColor={isOff}>
+            {printable(glyph)}
+          </Text>
+        </Button>
+      </Box>
+    )
+  }
 
   return (
     <Box key={`${key}-ground`} flexShrink={0} backgroundColor={ground} hover={{ backgroundColor: theme.tileHover }}>
@@ -322,6 +396,13 @@ export function IconButton(ui: ElementTable, key: string, glyph: string, tone: s
  */
 export function TileButton(ui: ElementTable, key: string, label: string, onPress: () => void) {
   const { Box, Button } = ui
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key={`${key}-tile`} flexShrink={0}>
+        <Button key={key} label={printable(label)} variant="primary" onPress={onPress} />
+      </Box>
+    )
+  }
 
   return (
     <Box key={`${key}-tile`} paddingX={1} backgroundColor={theme.tileMain} hover={{ backgroundColor: theme.tileHover }}>
@@ -336,7 +417,14 @@ export function TileButton(ui: ElementTable, key: string, label: string, onPress
  * lighter under the pointer. It never shrinks; the row it sits in gives way.
  */
 export function SelectField(ui: ElementTable, key: string, value: string, onPress: () => void) {
-  const { Box } = ui
+  const { Box, Button } = ui
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key={`${key}-field`} flexShrink={0}>
+        <Button key={key} label={`${printable(value)} ▾`} onPress={onPress} />
+      </Box>
+    )
+  }
 
   return (
     <Box key={`${key}-field`} paddingX={1} flexShrink={0} backgroundColor={theme.switchOff} hover={{ backgroundColor: theme.tabActive }}>
@@ -380,6 +468,53 @@ export function StatRow(ui: ElementTable, key: string, items: { label: string; v
   )
 }
 
+/** The chart's bars as a remote surface draws `cyan`, and its labels' grey, readable on a dark and a light page alike. */
+const CHART_BAR = '#0098ba'
+const CHART_LABEL = '#8a8a8a'
+/** The picture's measures in CSS pixels: a bar, the space after it, the bars' height, the label row. */
+const CHART_BAR_PX = 10
+const CHART_GAP_PX = 4
+const CHART_HEIGHT_PX = 72
+const CHART_LABELS_PX = 16
+
+/** What XML would read as markup in a label, escaped. */
+function xmlText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/**
+ * The bar chart as SVG markup: one rounded bar per value from a shared
+ * baseline, a small value still a sliver, and under it the label of every
+ * bar where they are few, of every fifth otherwise, as the terminal's does.
+ */
+export function barChartSvg(bars: { label: string; value: number }[], largest: number): string {
+  const step = CHART_BAR_PX + CHART_GAP_PX
+  const width = Math.max(step, bars.length * step - CHART_GAP_PX)
+  const everyLabel = bars.length <= 10
+  const rects = bars.map((bar, index) => {
+    if (bar.value <= 0) return ''
+    const tall = Math.max(2, Math.round((bar.value / largest) * CHART_HEIGHT_PX))
+
+    return `<rect x="${index * step}" y="${CHART_HEIGHT_PX - tall}" width="${CHART_BAR_PX}" height="${tall}" rx="1.5" fill="${CHART_BAR}"/>`
+  })
+  const labels = bars.map((bar, index) =>
+    everyLabel || index % 5 === 0
+      ? `<text x="${index * step + CHART_BAR_PX / 2}" y="${CHART_HEIGHT_PX + 12}" text-anchor="middle">${xmlText(printable(bar.label).slice(-2))}</text>`
+      : '',
+  )
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${CHART_HEIGHT_PX + CHART_LABELS_PX}" viewBox="0 0 ${width} ${CHART_HEIGHT_PX + CHART_LABELS_PX}">`,
+    ...rects,
+    `<g fill="${CHART_LABEL}" font-family="-apple-system, system-ui, sans-serif" font-size="10">`,
+    ...labels,
+    '</g>',
+    '</svg>',
+  ]
+    .filter(part => part !== '')
+    .join('')
+}
+
 /** Eighths of a cell, from empty to full, for the bars of a chart. */
 const BAR_EIGHTHS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
 
@@ -393,6 +528,17 @@ const BAR_EIGHTHS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'
 export function BarChart(ui: ElementTable, key: string, bars: { label: string; value: number }[], width: number, height: number, largestText: string) {
   const { Box, Text } = ui
   const largest = Math.max(1, ...bars.map(bar => bar.value))
+  // A remote surface draws the chart as one picture: glyph rows in its own font leave gaps between them.
+  if (!isCellGrid(ui) && 'Svg' in ui) {
+    const { Svg } = ui
+
+    return (
+      <Box key={key} flexDirection="column">
+        <Text dimColor>{printable(largestText)}</Text>
+        <Svg source={barChartSvg(bars, largest)} alt={printable(largestText)} />
+      </Box>
+    )
+  }
   const barWidth = bars.length * 3 - 1 <= width ? 2 : 1
   const eighths = bars.map(bar => (bar.value > 0 ? Math.max(1, Math.round((bar.value / largest) * height * 8)) : 0))
   const rows = Array.from({ length: height }, (_, index) => height - 1 - index)
@@ -522,6 +668,26 @@ export function Tiles(ui: ElementTable, bodyColumns: number, given: Tile[], outl
   const { Box, Button } = ui
   if (given.length === 0) return null
   const tiles = given.map(tile => ({ ...tile, label: printable(tile.label) }))
+  // A remote surface's own buttons, sharing the row and wrapping by its own measure; the main one in its
+  // primary look. The surface shows the keyboard's place itself, and Cancel stays a labelled button
+  // (`role: dismiss` would turn it into the site's close mark).
+  if (!isCellGrid(ui)) {
+    return (
+      <Box key="footer" marginTop={1} columnGap={1} rowGap={1} flexWrap="wrap">
+        {tiles.map(tile => (
+          <Box key={`tile-${tile.key}`} flexGrow={1} flexShrink={0}>
+            <Button
+              key={tile.key}
+              label={tile.label}
+              {...(tile.isMain ? { variant: 'primary' as const } : {})}
+              {...(tile.isFocused ? { autoFocus: true as const } : {})}
+              onPress={tile.onPress}
+            />
+          </Box>
+        ))}
+      </Box>
+    )
+  }
   const needed = Math.max(...tiles.map(tile => displayWidth(tile.label))) + TILE_PADDING * 2
   const perRow = Math.max(1, Math.min(tiles.length, Math.floor((bodyColumns + TILE_GAP) / (needed + TILE_GAP))))
   const width = Math.max(needed, Math.floor((bodyColumns - TILE_GAP * (perRow - 1)) / perRow))
@@ -1076,6 +1242,18 @@ export function Toggle(
   const { Box, Button } = ui
   const segment = (side: 'on' | 'off') => {
     const isCurrent = (side === 'on') === isOn
+    // The current state presses nothing: pressing it changes nothing.
+    const press = () => {
+      if (!isCurrent) onToggle()
+    }
+    // A remote surface's own button, the current state in its primary look.
+    if (!isCellGrid(ui)) {
+      return (
+        <Box key={`${key}-${side}-segment`} flexShrink={0}>
+          <Button key={`${key}-${side}`} label={printable(states[side])} {...(isCurrent ? { variant: 'primary' as const } : {})} onPress={press} />
+        </Box>
+      )
+    }
 
     return (
       <Box
@@ -1089,18 +1267,15 @@ export function Toggle(
           label={printable(states[side])}
           plain
           {...(isCurrent ? {} : { dimColor: true })}
-          // The current segment is already the state: pressing it changes nothing.
-          onPress={() => {
-            if (!isCurrent) onToggle()
-          }}
+          onPress={press}
         />
       </Box>
     )
   }
 
   return (
-    <Box key={key} gap={1}>
-      <Box key={`${key}-segments`}>
+    <Box key={key} gap={1} alignItems="center">
+      <Box key={`${key}-segments`} columnGap={isCellGrid(ui) ? 0 : 1}>
         {segment('on')}
         {segment('off')}
       </Box>

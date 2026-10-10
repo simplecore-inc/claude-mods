@@ -50,9 +50,15 @@ test('restoring asks in a dialog: what it goes back to, what it undoes, and how 
     expect(await ui.find({ type: 'Text', text: 'Checkpoint: Fix the login bug' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /2 files, \+10 −3/ })).toBeDefined()
     expect((await ui.find({ key: 'dialog-confirm' }))?.props).toMatchObject({ autoFocus: true })
-    // Focus shows as the tile's border: the confirming tile first, in the accent colour.
-    expect((await ui.find({ key: 'tile-dialog-confirm' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan' })
-    expect((await ui.find({ key: 'tile-dialog-cancel' }))?.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
+    if (surface === 'terminal') {
+      // Focus shows as the tile's border: the confirming tile first, in the accent colour.
+      expect((await ui.find({ key: 'tile-dialog-confirm' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: 'cyan' })
+      expect((await ui.find({ key: 'tile-dialog-cancel' }))?.props).toMatchObject({ borderStyle: 'round', borderDimColor: true })
+    } else {
+      // The surface's own buttons show the focus; the confirming one is the primary.
+      expect((await ui.find({ key: 'dialog-confirm' }))?.props).toMatchObject({ variant: 'primary' })
+      expect((await ui.find({ key: 'tile-dialog-confirm' }))?.props.borderStyle).toBeUndefined()
+    }
     expect(await ui.find({ key: 'dialog-cancel' })).toBeDefined()
     // The dialog takes the workspace pane itself: no tab bar, no list behind it.
     expect(await ui.find({ key: 'tabs' })).toBeUndefined()

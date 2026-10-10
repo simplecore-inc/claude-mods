@@ -1,5 +1,5 @@
 import type { AccountsTabKey, BandTarget, StatusInfo, StorageView, UsageSummary, WebhookSend } from '../types'
-import { USAGE_KEY, loadIndex, syncLive, tickOrca } from './accounts'
+import { USAGE_KEY, loadIndex, sessionAccount, syncLive, tickOrca } from './accounts'
 import type { AccountsContext } from './accounts'
 import { lookedUpOnly } from './anthropic'
 import { askCleanup, askedCleanup, cleanUp, measureStorage } from './cleanup'
@@ -190,6 +190,7 @@ export async function listText(ctx: PaneContext): Promise<string> {
   const m = ctx.view.messages()
   const list = await ctx.accounts.accounts.get()
   const liveUuid = await ctx.accounts.live.get()
+  const sessionUuid = await sessionAccount(ctx.accounts)
   const readings = await ctx.accounts.usage.get()
   const now = await ctx.accounts.io.now()
   const codex = await ctx.codex.cell.get()
@@ -205,7 +206,9 @@ export async function listText(ctx: PaneContext): Promise<string> {
       const reading = readings[one.uuid]
       const detail = reading?.error ?? describeLimits(reading?.limits ?? [], now, m.now, ctx.view.locale())
 
-      return `${index + 1}. ${one.email}${one.uuid === liveUuid ? m.activeTag : ''}${reading?.isStale ? ` ${STALE_MARK}` : ''}  ${detail}`
+      const tags = `${one.uuid === liveUuid ? m.activeTag : ''}${one.uuid === sessionUuid && one.uuid !== liveUuid ? m.thisSessionTag : ''}`
+
+      return `${index + 1}. ${one.email}${tags}${reading?.isStale ? ` ${STALE_MARK}` : ''}  ${detail}`
     }),
     ...codexLine,
   ].join('\n')
@@ -271,6 +274,7 @@ export async function paneModel(ctx: PaneContext, bodyColumns: number, hasField:
     tab: await cells.tab.get(),
     accounts: await ctx.accounts.accounts.get(),
     liveUuid: await ctx.accounts.live.get(),
+    sessionUuid: await sessionAccount(ctx.accounts),
     readings: await ctx.accounts.usage.get(),
     codex: await ctx.codex.cell.get(),
     isGuideShown: await cells.isGuideOpen.get(),

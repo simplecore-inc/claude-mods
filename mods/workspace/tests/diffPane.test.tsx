@@ -64,7 +64,9 @@ test('the diff tab names its base as a button that opens the base dialog', async
   for (const surface of [...SURFACES, 'mobile'] as const) {
     const ui = await mountPane($, surface)
     expect((await ui.find({ key: 'diff-base' }))?.text).toMatch(/Session start ▾$/)
-    expect((await ui.find({ key: 'diff-base-field' }))?.props.backgroundColor).toBeDefined()
+    // A filled select on the terminal; elsewhere the surface's own button is the field.
+    if (surface === 'terminal') expect((await ui.find({ key: 'diff-base-field' }))?.props.backgroundColor).toBeDefined()
+    else expect((await ui.find({ key: 'diff-base' }))?.type).toBe('Button')
     await ui.unmount()
   }
   const ui = await mountPane($, 'terminal')

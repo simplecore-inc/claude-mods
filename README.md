@@ -67,6 +67,8 @@ Without a click, every control is reached from the keyboard:
 
 The first pane a command opens outside fullscreen mode says so in its reply.
 
+In the Claude desktop app the panes and the band draw with the app's own buttons, tabs and font: rows wrap by the app's measure rather than the terminal's cells, the Usage chart is a picture, and a pane closes from its own title bar.
+
 ## Install
 
 ```bash

@@ -4,6 +4,20 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.7.1 (2026-10-10)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Where the Claude desktop app runs a session on its own login, the status band names that account, the figures every response reports are filed under it from the first turn, and its card is outlined and marked **this session**, with a note that a switch changes the machine's login and not this session's. `/sc:accounts list` marks it `[this session]`.
+
+### Every pane
+
+- In the desktop app, and on any surface that draws its own controls, the panes, tabs, tiles, dialogs and the status band draw with the surface's own buttons and font: rows wrap by the surface's measure instead of the terminal's cells, no rule or half block is drawn, the header's close is left to the pane's title bar, and the Usage chart is a picture.
+- A status band cell is one button whose press opens its pane, its text in its own colours.
+
 ## 0.7.0 (2026-10-10)
 
 > [!IMPORTANT]

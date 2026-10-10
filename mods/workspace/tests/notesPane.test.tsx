@@ -32,8 +32,14 @@ test('the notes tab: an input where the surface has one, open notes first', asyn
     // [ On | Off ]: the current segment (Off) filled grey, the other dim; the name beside flips it too.
     expect((await ui.find({ key: 'notes-send-on' }))?.text).toBe('On')
     expect((await ui.find({ key: 'notes-send-off' }))?.text).toBe('Off')
-    expect((await ui.find({ key: 'notes-send-off-segment' }))?.props.backgroundColor).toBe('#5a606b')
-    expect((await ui.find({ key: 'notes-send-on' }))?.props.dimColor).toBe(true)
+    if (surface === 'terminal') {
+      expect((await ui.find({ key: 'notes-send-off-segment' }))?.props.backgroundColor).toBe('#5a606b')
+      expect((await ui.find({ key: 'notes-send-on' }))?.props.dimColor).toBe(true)
+    } else {
+      // The surface's own buttons: the current state the primary one.
+      expect((await ui.find({ key: 'notes-send-off' }))?.props).toMatchObject({ variant: 'primary' })
+      expect((await ui.find({ key: 'notes-send-on' }))?.props.variant).toBeUndefined()
+    }
     expect((await ui.find({ key: 'notes-send-label' }))?.text).toBe('Send with prompts')
     await ui.unmount()
   }

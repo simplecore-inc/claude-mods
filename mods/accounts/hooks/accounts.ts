@@ -94,6 +94,25 @@ export function lastLiveChange(): number {
   return liveChangedAt
 }
 
+/**
+ * The account a host signed this session in with, when it did: the desktop
+ * app runs its Claude Code sessions on the app's own login and names it in
+ * `CLAUDE_CODE_ACCOUNT_UUID`, whatever Claude Code's login on this machine
+ * (the live account) is. Null where Claude Code signs itself in.
+ */
+export async function hostAccount(io: Io): Promise<{ uuid: string; email: string | null } | null> {
+  const uuid = (await io.env('CLAUDE_CODE_ACCOUNT_UUID'))?.trim() ?? ''
+  if (uuid === '') return null
+  const email = (await io.env('CLAUDE_CODE_USER_EMAIL'))?.trim() ?? ''
+
+  return { uuid, email: email === '' ? null : email }
+}
+
+/** The account this session's requests go out under: the host's, else the live account. */
+export async function sessionAccount(ctx: AccountsContext): Promise<string | null> {
+  return (await hostAccount(ctx.io))?.uuid ?? ctx.live.get()
+}
+
 /** Whether the live login is still the token the last read filed under `uuid`. */
 export function isLiveTokenOf(credential: Credential, uuid: string): boolean {
   return liveOwner?.uuid === uuid && liveOwner.accessToken === credential.claudeAiOauth.accessToken
