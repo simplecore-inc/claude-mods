@@ -36,7 +36,9 @@ Keeps several Claude logins on this machine and switches every running session t
 
 ### With Orca
 
-[Orca](https://www.onorca.dev) can keep Claude logins of its own. While one is selected there, Orca writes it into Claude Code's login each time it launches Claude, fetches the rate limits or starts, which puts back any login changed elsewhere. sc-accounts works with it, and without it:
+From Orca 1.4.230, Orca runs each of its Claude accounts in a config folder of its own and writes nothing into this machine's Claude Code login: selecting an account there only chooses the folder new Orca panes start in. sc-accounts recognises such an Orca (its account list marks each account `runsOnSystemDefault` or `needsSignIn`) and works as without Orca: a switch is made here alone, nothing is selected in Orca, and the saved logins are refreshed in one place only. The copies earlier builds kept in the keychain item `Orca Claude Code Managed Credentials` are no longer read by Orca or by sc-accounts.
+
+Up to 1.4.223, [Orca](https://www.onorca.dev) kept Claude logins of its own. While one was selected there, Orca wrote it into Claude Code's login each time it launches Claude, fetches the rate limits or starts, which put back any login changed elsewhere. With those builds sc-accounts works as follows:
 
 | Orca | A switch | A login changed elsewhere |
 | --- | --- | --- |

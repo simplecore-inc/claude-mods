@@ -46,6 +46,8 @@ test('the pane offers switching only for the accounts not in use', async ($, on)
     }
     expect(await ui.find({ key: 'guide' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Login expired/ })).toBeDefined()
+    // A reason is one line, cut at the card's edge rather than wrapped under the gauges.
+    expect((await ui.find({ type: 'Text', text: /Login expired/ }))?.props).toMatchObject({ wrap: 'truncate-end' })
     // A rate-limited account shows one mark and no words.
     expect((await ui.findAll({ type: 'Text', text: /^ ◷$/ })).length).toBe(1)
     expect(await ui.find({ type: 'Text', text: /한도|limited/ })).toBeUndefined()

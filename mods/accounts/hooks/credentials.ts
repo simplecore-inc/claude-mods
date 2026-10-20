@@ -211,6 +211,18 @@ export async function keepCredentialFileInStep(io: Io, keychain: Credential): Pr
   if (fileLagsKeychain(file, keychain)) await writeLiveFile(io, keychain)
 }
 
+/**
+ * The lock one account's refresh takes, wherever the saved login it guards
+ * lives: the keychain is the machine's, so on macOS every session takes the
+ * same lock whatever its `CLAUDE_CONFIG_DIR` (Orca 1.4.230 runs a pane in an
+ * account's own folder); a vault file is its config folder's, and so is its lock.
+ */
+export async function refreshLockPath(io: Io, uuid: string): Promise<string> {
+  const base = (await platformOf(io)).backend === 'keychain' ? `${await homeDirectory(io)}/.claude` : await claudeDirectory(io)
+
+  return `${base}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
+}
+
 async function vaultPath(io: Io, uuid: string): Promise<string> {
   return vaultFilePath(await claudeDirectory(io), VAULT_DIRECTORY, uuid)
 }
@@ -348,7 +360,7 @@ export type OrcaCopyStep = 'refreshed' | 'fresh' | 'absent'
  */
 export async function refreshOrcaCopy(io: Io, uuid: string, place: OrcaCopyPlace, marginMs: number, noAnswer: string): Promise<OrcaCopyStep> {
   const { isWindows } = await platformOf(io)
-  const lockPath = `${await claudeDirectory(io)}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
+  const lockPath = await refreshLockPath(io, uuid)
 
   return withLock(io, lockPath, { ...REFRESH_LOCK, isWindows }, async () => {
     const saved = await readVault(io, uuid)
@@ -400,7 +412,7 @@ export async function refreshOrcaCopy(io: Io, uuid: string, place: OrcaCopyPlace
 export async function ensureFresh(io: Io, uuid: string, credential: Credential, live: Credential | null, noAnswer: string): Promise<Credential> {
   if (!needsRefresh(credential, await io.now()) || isSameGrant(credential, live)) return credential
   const { isWindows } = await platformOf(io)
-  const lockPath = `${await claudeDirectory(io)}/sc-accounts/locks/refresh-${checkedId(uuid)}.lock`
+  const lockPath = await refreshLockPath(io, uuid)
 
   return withLock(io, lockPath, { ...REFRESH_LOCK, isWindows }, async () => {
     const current = (await readVault(io, uuid)) ?? credential

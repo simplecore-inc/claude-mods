@@ -2,6 +2,17 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.7.2 (2026-10-20)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Works with Orca 1.4.230, which runs each account in a Claude config folder of its own and writes nothing into this machine's Claude Code login: such an Orca is treated as keeping no login, so a switch is made here alone, nothing is selected in Orca, and the copies earlier Orca builds kept are no longer refreshed beside the saved login.
+- On macOS a saved login is refreshed under one lock for the whole machine, whatever `CLAUDE_CONFIG_DIR` a session runs with, so two sessions never refresh the same grant at once.
+- An expired login reads `Login expired (sign in again)`, on one line cut at the card's edge.
+
 ## 0.7.1 (2026-10-10)
 
 > [!IMPORTANT]

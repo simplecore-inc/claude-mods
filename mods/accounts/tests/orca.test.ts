@@ -167,3 +167,22 @@ test('the client takes the socket and the time from argv and the request from st
   expect(ORCA_CLIENT_SCRIPT.includes('<STDIN>')).toBe(true)
   expect(ORCA_CLIENT_SCRIPT.includes('authToken')).toBe(false)
 })
+
+test('Orca 1.4.230 runs each account in a folder of its own and writes no login here: it keeps none of this machine\'s', () => {
+  // `accounts.list` as Orca 1.4.230 answers it: no account carries a login Orca writes into Claude Code.
+  const result = {
+    claude: {
+      accounts: [
+        { id: 'o-mina', email: 'mina@example.com', managedAuthRuntime: 'host', organizationUuid: 'org-mina', runsOnSystemDefault: true },
+        { id: 'o-jun', email: 'jun@example.org', managedAuthRuntime: 'host', organizationUuid: 'org-jun', needsSignIn: true },
+      ],
+      activeAccountId: 'o-mina',
+      activeAccountIdsByRuntime: { host: 'o-mina' },
+      systemDefaultEmail: 'mina@example.com',
+    },
+  }
+  const claude = parseOrcaClaude(result)
+  expect(claude).toEqual({ accounts: [], activeId: null })
+  // So a switch is made here alone, and no copy of Orca's is refreshed or selected.
+  expect(planSwitch({ kind: 'ok', claude: claude! }, null, 'jun@example.org', 'org-jun')).toEqual({ kind: 'direct' })
+})

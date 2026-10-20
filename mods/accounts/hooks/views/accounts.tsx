@@ -165,7 +165,7 @@ function CodexCard(ui: ElementTable, codex: CodexAccountView, cells: LimitCell[]
         {LimitRows(ui, 'codex', cells, slot, room)}
         {!reading && <Text dimColor>{m.loading}</Text>}
         {codex.login?.kind === 'none' && Toned(ui, 'codex-signed-out', m.codexSignedOut, 'warn')}
-        {reading?.error && Toned(ui, 'codex-error', reading.error, 'danger')}
+        {reading?.error && Toned(ui, 'codex-error', reading.error, 'danger', { wrap: 'truncate-end' })}
         {creditsLine !== '' && Toned(ui, 'codex-credits', creditsLine, undefined, { isDim: true })}
       </Box>
     </Box>,
@@ -222,7 +222,8 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               {isHostOnly && Toned(ui, `session-note-${one.uuid}`, m.hostAccountNote, undefined, { isDim: true, wrap: 'wrap' })}
               {LimitRows(ui, one.uuid, cellsOf.get(one.uuid) ?? [], slot, room)}
               {!reading && <Text dimColor>{m.loading}</Text>}
-              {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger')}
+              {/* One line, cut at the card's edge: a reason never pushes the gauges down. */}
+              {reading?.error && Toned(ui, `error-${one.uuid}`, reading.error, 'danger', { wrap: 'truncate-end' })}
               {/* Orca keeps this login and its token is not refreshed here: the figures age until the account is in use. */}
               {reading?.isHeld && Toned(ui, `held-${one.uuid}`, m.heldByOrca, undefined, { isDim: true })}
               {/* Only what the usage endpoint reported for this account, as it reported it. */}

@@ -90,10 +90,20 @@ export function parseOrcaFrame(text: string, id: string): OrcaFrame | null {
   return null
 }
 
-/** The Claude part of what `accounts.list` answers, or null when it holds none. */
+/**
+ * The Claude part of what `accounts.list` answers, or null when it holds none.
+ * From 1.4.230 Orca runs each account in a Claude config folder of its own and
+ * writes no login into Claude Code's: its answer says so (`systemDefaultEmail`,
+ * an account's `needsSignIn` or `runsOnSystemDefault`), and it then keeps no
+ * login of this machine's Claude Code, as when no account is selected.
+ */
 export function parseOrcaClaude(result: unknown): OrcaClaude | null {
   const claude = (result as { claude?: { accounts?: unknown; activeAccountId?: unknown; activeAccountIdsByRuntime?: { host?: unknown } } } | null)?.claude
   if (!claude || !Array.isArray(claude.accounts)) return null
+  const routesByFolder =
+    Object.hasOwn(claude, 'systemDefaultEmail') ||
+    (claude.accounts as Record<string, unknown>[]).some(account => typeof account === 'object' && account !== null && ('needsSignIn' in account || 'runsOnSystemDefault' in account))
+  if (routesByFolder) return { accounts: [], activeId: null }
   const accounts = (claude.accounts as { id?: unknown; email?: unknown; organizationUuid?: unknown; managedAuthRuntime?: unknown }[])
     // A login Orca keeps in a WSL distribution is written there, not into this machine's Claude Code.
     .filter(account => typeof account.id === 'string' && typeof account.email === 'string' && (account.managedAuthRuntime ?? 'host') === 'host')
