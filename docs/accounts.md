@@ -34,9 +34,15 @@ Keeps several Claude logins on this machine and switches every running session t
 
    A window opened before the switch takes it up too: Claude Code reads the stored login again before it refreshes a token, so that window refreshes the new login instead of writing back the old one. When the login Claude Code holds is rejected outright, as a token already spent elsewhere is (the profile endpoint answers 401 or 403, or the token is empty), and the account `~/.claude.json` names has a saved login that works without a refresh, sc-accounts puts that saved login back, records it as `heal` and says so in a toast. A saved login that needs refreshing first is left to `/login`, as several sessions refreshing it at once would spend it too.
 
+### In the desktop app
+
+The Claude desktop app runs its Code sessions with the app's own account and names it to the session (`CLAUDE_CODE_ACCOUNT_UUID`), whatever Claude Code's login on this machine is. A switch made there would leave that session's account as it is and change the login of the terminal sessions, which the person does not see from the app. So in such a session sc-accounts switches nothing: the cards show no **Switch**, and `/sc:accounts use` answers that the login is switched from a terminal session. The app's own account is changed in the app.
+
+Everything else works there as in a terminal: the cards and their usage, **Refresh**, removing a saved account, and saving a login made with `/login` in a terminal.
+
 ### With Orca
 
-From Orca 1.4.230, Orca runs each of its Claude accounts in a config folder of its own and writes nothing into this machine's Claude Code login: selecting an account there only chooses the folder new Orca panes start in. sc-accounts recognises such an Orca (its account list marks each account `runsOnSystemDefault` or `needsSignIn`) and works as without Orca: a switch is made here alone, nothing is selected in Orca, and the saved logins are refreshed in one place only. The copies earlier builds kept in the keychain item `Orca Claude Code Managed Credentials` are no longer read by Orca or by sc-accounts.
+From Orca 1.4.230, Orca runs each of its Claude accounts in a config folder of its own and writes nothing into this machine's Claude Code login: selecting an account there only chooses the folder new Orca panes start in. sc-accounts recognises such an Orca (its account list names Claude Code's own folder as `systemDefaultHome`, and each account's folder as `home` or the account as `runsOnSystemDefault` or `needsSignIn`) and works as without Orca: a switch is made here alone, nothing is selected in Orca, and the saved logins are refreshed in one place only. The copies earlier builds kept in the keychain item `Orca Claude Code Managed Credentials` are no longer read by Orca or by sc-accounts.
 
 Up to 1.4.223, [Orca](https://www.onorca.dev) kept Claude logins of its own. While one was selected there, Orca wrote it into Claude Code's login each time it launches Claude, fetches the rate limits or starts, which put back any login changed elsewhere. With those builds sc-accounts works as follows:
 
@@ -61,7 +67,7 @@ The pane has the tabs **Accounts**, **Usage** and **Storage**; a digit switches 
 
 ### Accounts
 
-- One card per account. The account this session's requests go out under is outlined, with a filled dot: Claude Code's login on this machine, marked **active**. Where the Claude desktop app runs the session on its own login (it names that account in `CLAUDE_CODE_ACCOUNT_UUID`), that account's card is the outlined one, marked **this session**, with a note that a switch changes the machine's login and not this session's; the machine's login keeps its **active** mark. `/sc:accounts list` marks it `[this session]`.
+- One card per account. The account this session's requests go out under is outlined, with a filled dot: Claude Code's login on this machine, marked **active**. Where the Claude desktop app runs the session on its own login (it names that account in `CLAUDE_CODE_ACCOUNT_UUID`), that account's card is the outlined one, marked **this session**; the machine's login keeps its **active** mark. `/sc:accounts list` marks it `[this session]`. No account is switched from such a session: the cards show no **Switch**, a line above them says so, and `/sc:accounts use` answers the same. See [In the desktop app](#in-the-desktop-app).
 - A usage bar for each window, and under it the reset time in local time with the time left, such as `↻ 17:00(3h 05m)` today, or `↻ Wed 10/7 11:00(2d 20h)` on another day. Windows that reset together, such as the weekly limit and a model's weekly limit, share one cell and one reset line. In a weekly window's last three days its labels and reset line turn yellow, then orange the day before, then red on the day it resets, counted in local calendar days; the five-hour window stays as it is.
 - Beside each email, how long ago its figures were looked up, to the minute, such as `(updated 12m ago)`. Under a minute it shows nothing.
 - `◷` beside an account: its last lookup was rate limited, so the figures are the previous reading's. It clears on the next successful lookup.
@@ -107,9 +113,9 @@ A band above the prompt, under a dim rule. It stays on one line and wraps only w
 - the account this session's requests go out under: the desktop app's own where the app runs the session on its own login (by the email the app passes when sc-accounts has not saved it), else the live account
 - the model, effort (or ULTRACODE) and fast mode
 - the current task
-- the session's context gauge, and five-hour and weekly usage; the weekly label and its reset turn yellow three days before the reset, orange the day before and red on the day
+- the session's context gauge, on a dark block in the terminal and on the app's own ground in the desktop app, and five-hour and weekly usage; the weekly label and its reset turn yellow three days before the reset, orange the day before and red on the day
 - the directory, branch and PR
-- the lines added and removed, on a filled block
+- the lines added and removed, on a filled block in the terminal and as the app's own button in the desktop app
 
 Some cells open a pane when pressed, and pressing again closes it:
 

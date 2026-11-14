@@ -66,23 +66,40 @@ test('the band names an app account sc-accounts never saved by the email the app
   await ui.unmount()
 })
 
-test('the Accounts tab marks the app\'s account as this session\'s and says a switch changes the machine\'s login alone', async ($, on) => {
+test('the Accounts tab marks the app\'s account as this session\'s, offers no switch and says where one is made', async ($, on) => {
   seedState(on, hostEnv('u2', 'jun@example.org'))
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface, 100)
+    // The card in use is the session's, accented, with its badge.
+    expect((await ui.find({ key: 'row-u2' }))?.props).toMatchObject({ borderColor: 'cyan' })
+    expect((await ui.find({ key: 'row-u1' }))?.props.borderColor).toBeUndefined()
+    expect((await ui.find({ key: 'row-u2' }))?.text).toContain(' this session ')
+    // The live login keeps its Active badge.
+    expect((await ui.find({ key: 'row-u1' }))?.text).toContain(' active ')
+    // No card switches: the app signs the session in, and a switch would change only the machine's login.
+    for (const uuid of ['u1', 'u2', 'u3']) expect(await ui.find({ key: `use-${uuid}` })).toBeUndefined()
+    expect((await ui.find({ key: 'host-note' }))?.text).toContain('from a terminal session')
+    // A saved account is still removed from here.
+    expect(await ui.find({ key: 'remove-u3' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('where the app\'s account is also the machine\'s login, the tab still offers no switch and says why', async ($, on) => {
+  seedState(on, hostEnv('u1', 'mina@example.com'))
   const ui = await mountPane($, 'desktop', 100)
-  // The card in use is the session's, accented, with its badge and the note.
-  expect((await ui.find({ key: 'row-u2' }))?.props).toMatchObject({ borderColor: 'cyan' })
-  expect((await ui.find({ key: 'row-u1' }))?.props.borderColor).toBeUndefined()
-  expect((await ui.find({ key: 'row-u2' }))?.text).toContain(' this session ')
-  expect((await ui.find({ key: 'row-u2' }))?.text).toContain("not this session's")
-  // The live login keeps its Active badge.
   expect((await ui.find({ key: 'row-u1' }))?.text).toContain(' active ')
+  for (const uuid of ['u2', 'u3']) expect(await ui.find({ key: `use-${uuid}` })).toBeUndefined()
+  expect(await ui.find({ key: 'host-note' })).toBeDefined()
   await ui.unmount()
 })
 
-test('with no app account, the live login is the account in use and no session badge shows', async ($, on) => {
+test('where Claude Code signs the session in itself, every other card switches and no note is drawn', async ($, on) => {
   seedState(on, {})
-  const ui = await mountPane($, 'terminal', 100)
-  expect((await ui.find({ key: 'row-u1' }))?.props).toMatchObject({ borderColor: 'cyan' })
-  expect((await ui.find({ key: 'row-u1' }))?.text).not.toContain('this session')
-  await ui.unmount()
+  for (const surface of SURFACES) {
+    const ui = await mountPane($, surface, 100)
+    for (const uuid of ['u2', 'u3']) expect(await ui.find({ key: `use-${uuid}` })).toBeDefined()
+    expect(await ui.find({ key: 'host-note' })).toBeUndefined()
+    await ui.unmount()
+  }
 })

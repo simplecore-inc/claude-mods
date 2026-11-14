@@ -16,6 +16,8 @@ export type AccountsModel = {
   liveUuid: string | null
   /** The account this session's requests go out under: the app's own where the app runs the session. */
   sessionUuid: string | null
+  /** Whether a host signs this session in with its own account: the cards offer no switch, and a note says where one is made. */
+  isHostSession: boolean
   readings: Record<string, UsageView>
   /** The Codex account this session's Codex uses; null where the Codex CLI does not run, and no card is drawn. */
   codex: CodexAccountView | null
@@ -174,7 +176,7 @@ function CodexCard(ui: ElementTable, codex: CodexAccountView, cells: LimitCell[]
 
 export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: AccountsActions) {
   const { Box, Text } = ui
-  const { list, liveUuid, sessionUuid, readings, now, locale, m } = model
+  const { list, liveUuid, sessionUuid, isHostSession, readings, now, locale, m } = model
   // The card's border and padding take CARD_CHROME cells, the limits' indent two more.
   const room = Math.max(20, model.bodyColumns - CARD_CHROME - 2)
   // One gauge width for every card, so the columns line up across them.
@@ -184,6 +186,12 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
 
   return (
     <Box key="accounts" flexDirection="column">
+      {/* The app signs this session in itself: a switch would change the machine's login, not this session's. */}
+      {isHostSession && (
+        <Box key="host-note" paddingLeft={2}>
+          {Toned(ui, 'host-note-text', m.hostAccountNote, undefined, { isDim: true, wrap: 'wrap' })}
+        </Box>
+      )}
       {list.length === 0 && Empty(ui, 'accounts-empty', [m.noAccountsYet])}
       {list.map(one => {
         const reading = readings[one.uuid]
@@ -211,15 +219,13 @@ export function AccountsTab(ui: ElementTable, model: AccountsModel, actions: Acc
               </Text>
               {!isLive && (
                 <Box gap={2} alignItems="center">
-                  {TileButton(ui, `use-${one.uuid}`, m.switchButton, () => actions.switchTo(one.uuid))}
+                  {!isHostSession && TileButton(ui, `use-${one.uuid}`, m.switchButton, () => actions.switchTo(one.uuid))}
                   {/* Removing asks in a dialog first. */}
                   {IconButton(ui, `remove-${one.uuid}`, '✕', theme.danger, () => actions.remove(one.uuid))}
                 </Box>
               )}
             </Box>
             <Box flexDirection="column" paddingLeft={2}>
-              {/* The app signs this session in itself: a switch here changes the machine's login, not this session's. */}
-              {isHostOnly && Toned(ui, `session-note-${one.uuid}`, m.hostAccountNote, undefined, { isDim: true, wrap: 'wrap' })}
               {LimitRows(ui, one.uuid, cellsOf.get(one.uuid) ?? [], slot, room)}
               {!reading && <Text dimColor>{m.loading}</Text>}
               {/* One line, cut at the card's edge: a reason never pushes the gauges down. */}

@@ -12,7 +12,7 @@ import { step as codexStep, type CodexContext, type Shared } from '../../hooks/c
 import { refresh } from '../../hooks/paneControl'
 import { messagesFor } from '../../hooks/i18n'
 import { fakeMachine } from '../machine'
-import { codex, engine, REMINDER, step, TASK, THREAD } from './fake'
+import { codex, engine, engineBand, REMINDER, step, TASK, THREAD } from './fake'
 
 // How a codex agent's step and its Codex server end, and what they leave
 // behind: a stop while Codex starts, a server that has gone, a write that
@@ -111,7 +111,7 @@ describe('a codex agent stopped while Codex starts', () => {
       note: async () => undefined,
       invalidate: () => undefined,
       sent,
-      openings: shared({ a1: 'Do it.' }),
+      openings: shared<Record<string, string>>({ a1: 'Do it.' }),
       options: shared({}),
       runs: shared({}),
     }
@@ -173,12 +173,12 @@ test('one failed write to Codex fails that request alone; the next still reaches
 })
 
 describe('what the pane and the band no longer wait on', () => {
-  const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
+  const BAND = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
 
   test('a codex reply shows in the band of the surface whose view it was run in, not in another surface\'s', async ($, on) => {
     const agents: AgentInfo[] = [{ id: 'c5', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' }]
     on('agent.list', () => ({ value: agents }))
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    engineBand(on, { hasEnv: false })
     on('state.get', () => ({ value: { value: undefined, version: 1 } as never }))
     on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
     const desktop = await $.ui.mount({ plugin: 'sc-accounts', surface: 'desktop', component: 'AbovePrompt', props: { ...BAND, view: { agentId: 'c5' } } as never })
@@ -195,7 +195,7 @@ describe('what the pane and the band no longer wait on', () => {
       asked += 1
       return { value: [] as AgentInfo[] }
     })
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    engineBand(on, { hasEnv: false })
     const clock = mock.clock(on, { now: 5_000_000 })
     const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, view: { agentId: 'gone' } } as never })
     await band.redraw({ ...BAND, view: { agentId: 'gone' } } as never)

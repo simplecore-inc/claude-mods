@@ -8,12 +8,12 @@ import { HINT } from '../../hooks/codex/commands'
 import { commandOf } from '../../hooks/codex/events'
 import { flagsOf } from '../../hooks/codex/flags'
 import { openView, setOpenView } from '../../hooks/codex/view'
-import { codexMachine } from './fake'
+import { codexMachine, engineBand } from './fake'
 
 // How the codex agents sit beside the accounts and other plugins: views per
 // surface, commands named exactly, a /clear, and the agent list asked once.
 
-const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
+const BAND = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
 
 describe('the codex view, surface by surface', () => {
   test('a terminal and a desktop showing different views each keep their own, so neither redraws the other', () => {
@@ -42,7 +42,7 @@ describe('commands', () => {
     const agents: AgentInfo[] = [{ id: 'c9', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' }]
     on('agent.list', () => ({ value: agents }))
     let tail: string | undefined
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    engineBand(on, { hasEnv: false })
     on('ui.render', { component: 'PromptHint' }, (_$, e) => {
       tail = e.props.tail
       return { type: 'Text', props: {}, children: [e.props.hint] } as never
@@ -61,7 +61,7 @@ test('the band asks the engine for an agent\'s type once, however often it draws
     asked += 1
     return { value: [{ id: 'g7', type: 'general-purpose', description: 'Search', status: 'running' }] as AgentInfo[] }
   })
-  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+  engineBand(on, { hasEnv: false })
   const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, view: { agentId: 'g7' } } as never })
   await band.redraw({ ...BAND, view: { agentId: 'g7' } } as never)
   await band.redraw({ ...BAND, view: { agentId: 'g7' } } as never)

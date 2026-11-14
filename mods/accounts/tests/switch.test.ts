@@ -27,9 +27,10 @@ type OrcaState = 'absent' | 'down' | { accounts: readonly (typeof ORCA_MINA)[]; 
 /**
  * The machine beneath the plugin: Claude Code's config and credentials file,
  * the keychain, the plugin's store and state, the profile and usage
- * endpoints, and Orca, absent, closed or answering on its socket.
+ * endpoints, and Orca, absent, closed or answering on its socket. `env` adds
+ * to the process environment, as the account an app signs the session in with.
  */
-function machine(on: On, start: OrcaState) {
+function machine(on: On, start: OrcaState, env: Record<string, string> = {}) {
   let orca: OrcaState = start
   const accounts = [
     { uuid: 'u1', email: MINA.emailAddress, savedAt: 0 },
@@ -79,7 +80,7 @@ function machine(on: On, start: OrcaState) {
     return { value: undefined as never }
   })
   on('store.keys', () => ({ value: Object.keys(store) as never }))
-  mock.env(on, { HOME, USER: 'me' })
+  mock.env(on, { HOME, USER: 'me', ...env })
   on('fs.exists', ($, e) => ({ value: (e.path in files || locks.has(e.path) || Object.keys(files).some(path => path.startsWith(`${e.path}/`))) as never }))
   on('fs.read', ($, e) => {
     if (!(e.path in files)) throw new Error(`ENOENT: ${e.path}`)
@@ -207,6 +208,24 @@ test('with no Orca on the machine, a switch writes the login here and never asks
   expect((JSON.parse(world.files[CONFIG] ?? '{}') as { oauthAccount: typeof JUN }).oauthAccount.emailAddress).toBe('jun@example.org')
   expect(world.orcaCalls).toEqual([])
   expect(world.changes().at(-1)).toMatchObject({ kind: 'switch', orca: 'direct', to: 'jun@example.org' })
+})
+
+test('in a session an app signs in with its own account, a switch is refused before anything changes', async ($, on) => {
+  // The desktop app names the account it runs the session with; Claude Code's login on the machine is another's.
+  const world = machine(on, 'absent', { CLAUDE_CODE_ACCOUNT_UUID: 'u9', CLAUDE_CODE_USER_EMAIL: 'app@example.com' })
+  const said = await run($, 'use 2')
+  expect(said).toContain('Not switched')
+  expect(said).toContain('from a terminal session')
+  expect(world.liveToken()).toBe('a-mina')
+  expect((JSON.parse(world.files[CONFIG] ?? '{}') as { oauthAccount: typeof MINA }).oauthAccount.emailAddress).toBe('mina@example.com')
+  expect(world.changes()).toEqual([])
+})
+
+test('where the app\'s account is also the machine\'s login, a switch from that session is refused all the same', async ($, on) => {
+  const world = machine(on, 'absent', { CLAUDE_CODE_ACCOUNT_UUID: 'u1', CLAUDE_CODE_USER_EMAIL: 'mina@example.com' })
+  expect(await run($, 'use 2')).toContain('Not switched')
+  expect(world.liveToken()).toBe('a-mina')
+  expect(world.changes()).toEqual([])
 })
 
 test('a switch changes the account and keeps the MCP connectors\' and plugins\' authorizations the machine holds', async ($, on) => {

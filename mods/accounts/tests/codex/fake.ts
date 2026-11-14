@@ -22,6 +22,19 @@ export const INSTALL = 'needs the Codex CLI with `codex app-server`'
 export const INTERIM = "I'll read app.js first."
 export const REMINDER = `<system-reminder>\nYour final report is delivered through ${HANDBACK}.\n</system-reminder>`
 
+/**
+ * What the engine beneath the plugin answers while the status band draws: its
+ * own band (nothing) and a session with no context reading yet, so the plugin
+ * hands the band on to the engine's. A band hook left without an answer is a
+ * skipped hook, which fails the test. The band reads the environment too: a
+ * test with no `engine` or `codexMachine` passes `hasEnv: false` to get one.
+ */
+export function engineBand(on: On, { hasEnv = true }: { hasEnv?: boolean } = {}): void {
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200_000 }, rateLimits: [] } as never }))
+  if (!hasEnv) mock.env(on, { HOME: '/home/me' })
+}
+
 type Fake = { argv: string[]; threads: any[]; prompts: string[]; inputs: number[]; steers: string[]; decisions: unknown[]; isClosed: boolean; writesAfterClose: number }
 
 // How the stand-in ends: answers and finishes (`ok`), finishes without asking

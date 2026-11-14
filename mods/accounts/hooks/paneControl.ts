@@ -1,5 +1,5 @@
 import type { AccountsTabKey, BandTarget, StatusInfo, StorageView, UsageSummary, WebhookSend } from '../types'
-import { USAGE_KEY, loadIndex, sessionAccount, syncLive, tickOrca } from './accounts'
+import { USAGE_KEY, hostAccount, loadIndex, sessionAccount, syncLive, tickOrca } from './accounts'
 import type { AccountsContext } from './accounts'
 import { lookedUpOnly } from './anthropic'
 import { askCleanup, askedCleanup, cleanUp, measureStorage } from './cleanup'
@@ -275,6 +275,7 @@ export async function paneModel(ctx: PaneContext, bodyColumns: number, hasField:
     accounts: await ctx.accounts.accounts.get(),
     liveUuid: await ctx.accounts.live.get(),
     sessionUuid: await sessionAccount(ctx.accounts),
+    isHostSession: (await hostAccount(ctx.accounts.io)) !== null,
     readings: await ctx.accounts.usage.get(),
     codex: await ctx.codex.cell.get(),
     isGuideShown: await cells.isGuideOpen.get(),
@@ -324,7 +325,12 @@ export function paneActions(ctx: PaneContext): PaneActions {
   return {
     dismiss: act(dismiss),
     selectTab: key => act(() => showTab(ctx, key))(),
-    askSwitch: uuid => ask({ kind: 'switch', uuid })(),
+    // A host-signed session opens no switch dialog: the switch itself is refused there.
+    askSwitch: uuid =>
+      act(async () => {
+        if ((await hostAccount(ctx.accounts.io)) !== null) return m.hostNoSwitch
+        ask({ kind: 'switch', uuid })()
+      })(),
     askRemove: uuid => ask({ kind: 'remove', uuid })(),
     switchTo: uuid =>
       act(async () => {

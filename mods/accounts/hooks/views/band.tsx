@@ -12,10 +12,12 @@ import { countdownTone, isCellGrid, Rule, theme } from '../shared/kit'
 
 /** Cells a band gauge spans: narrower than the pane's, so the band keeps to one line longer. */
 const BAR_WIDTH = 6
-/** The xterm-256 ground behind the context gauge. */
-const CONTEXT_GROUND = 236
-/** The xterm-256 ground behind the lines changed. */
-const LINES_GROUND = 236
+/**
+ * The xterm-256 ground behind the context gauge and the lines changed: a dark
+ * grey that lifts a cell off a terminal's ground. Drawn on the cell grid only:
+ * on a surface's own page the fixed fill reads as a black box.
+ */
+const NEUTRAL_GROUND = 236
 /** The xterm-256 ground behind the toolbox cell, by what its tools are doing: idle, running, waiting, failed. */
 const TOOLBOX_GROUND = { idle: 60, running: 28, waiting: 136, failed: 124 } as const
 /**
@@ -184,28 +186,22 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
     ...spans.map(span => ({ ...span, backgroundColor: ground })),
     isGrid ? { text: '▌', color: ground } : { text: ' ', backgroundColor: ground },
   ]
+  /** A cell with no colour of its own: on the neutral ground on the cell grid, on the surface's own ground elsewhere. */
+  const onNeutral = (spans: BandSpan[]): BandSpan[] => (isGrid ? onGround(ansiHex(NEUTRAL_GROUND), spans) : spans)
+  /** Text that recedes: a grey picked for the neutral ground on the cell grid, the surface's dim text elsewhere. */
+  const receding = (text: string, grey: number): BandSpan => (isGrid ? { text, color: ansiHex(grey) } : { text, dimColor: true })
   const first: Cell[] = []
   // The context gauge is built here and placed beside the usage windows below.
   if (contextUsed !== null) {
-    // The usage bars' gauge, coloured by the context thresholds, on a ground of its own.
+    // The usage bars' gauge, coloured by the context thresholds; on a ground of its own on the cell grid.
     const scaled = contextScaled(contextUsed)
     const { filled: gauge, rest } = barParts(scaled, BAR_WIDTH)
     const label = scaled >= 95 ? `✖ ${scaled}%` : `${scaled}%`
-    const ground = ansiHex(CONTEXT_GROUND)
     const ink = ansiHex(contextLabelColor(scaled))
     first.push({
       key: 'context',
       width: displayWidth(`ctx ${bar(scaled, BAR_WIDTH)} ${label}`) + 2,
-      draw: () =>
-        drawSpans(
-          'context',
-          onGround(ground, [
-            { text: 'ctx ', color: ansiHex(250) },
-            { text: gauge, color: ink },
-            { text: rest, color: ansiHex(240) },
-            { text: ` ${label}`, color: ink, bold: true },
-          ]),
-        ),
+      draw: () => drawSpans('context', onNeutral([receding('ctx ', 250), { text: gauge, color: ink }, receding(rest, 240), { text: ` ${label}`, color: ink, bold: true }])),
     })
   }
   // The account leads the band; the model and effort follow it.
@@ -280,7 +276,7 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
   if (status && (status.linesAdded > 0 || status.linesRemoved > 0)) {
     const added = `+${status.linesAdded}`
     const removed = `-${status.linesRemoved}`
-    // One filled block, so the counts read as one thing.
+    // One block, so the counts read as one thing: filled on the cell grid, the surface's own Button elsewhere.
     second.push({
       key: 'lines',
       width: displayWidth(`${added} ${removed}`) + 2,
@@ -288,7 +284,7 @@ export function StatusBand(ui: ElementTable, model: BandModel) {
         pressCell(
           'lines',
           'workspace',
-          onGround(ansiHex(LINES_GROUND), [
+          onNeutral([
             { text: added, color: ansiHex(42), bold: true },
             { text: ' ' },
             { text: removed, color: ansiHex(203), bold: true },

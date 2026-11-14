@@ -45,6 +45,8 @@ export type PaneModel = {
   liveUuid: string | null
   /** The account this session's requests go out under: the host's where the app runs it, else the live one. */
   sessionUuid: string | null
+  /** Whether a host (the desktop app) signs this session in with its own account: no account is switched from it. */
+  isHostSession: boolean
   readings: Record<string, UsageView>
   /** The Codex account this session's Codex uses; null where the Codex CLI does not run. */
   codex: CodexAccountView | null
@@ -211,6 +213,7 @@ export function AccountsPane(ui: ElementTable, model: PaneModel, actions: PaneAc
           list: model.accounts,
           liveUuid: model.liveUuid,
           sessionUuid: model.sessionUuid,
+          isHostSession: model.isHostSession,
           readings: model.readings,
           codex: model.codex,
           isGuideShown: model.isGuideShown,

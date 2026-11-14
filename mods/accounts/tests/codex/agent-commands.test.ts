@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { HANDBACK, type ApiTurn } from '../../hooks/codex/request'
-import { codex, engine, REMINDER, step, TASK, THREAD } from './fake'
+import { codex, engine, engineBand, REMINDER, step, TASK, THREAD } from './fake'
 
 // The test runner has timers; the mod's own environment declares none.
 declare const setTimeout: (run: () => void, ms: number) => unknown
@@ -238,16 +238,16 @@ describe('commands in a codex agent', () => {
   test('/codex-status during the first Codex turn names the session Codex is running', async ($, on) => {
     const turns: ApiTurn[] = [{ role: 'user', content: [{ type: 'text', text: TASK }, { type: 'text', text: REMINDER }] }]
     engine(on, turns)
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    engineBand(on)
     const fake = codex(on, 'busy')
-    const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: { agentId: 'a1' } } })
+    const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: { agentId: 'a1' } } as never })
     const running = step($, 0)
     for (let i = 0; i < 200 && fake.prompts.length < 1; i++) await new Promise<void>(resolve => setTimeout(() => resolve(), 5))
     await $.command.run({ command: 'codex-status', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 150 } })
     // The reply was made while Codex worked; the band is read once it is done.
     await $.session.send({ to: 'writer', text: 'Go on.', origin: { kind: 'model' } } as never)
     await running
-    await band.redraw({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: { agentId: 'a1' } })
+    await band.redraw({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 }, view: { agentId: 'a1' } } as never)
     expect(await band.find({ text: /no Codex turn yet/ })).toBeUndefined()
     expect(await band.find({ text: new RegExp(`session +${THREAD}`) })).toBeTruthy()
   })

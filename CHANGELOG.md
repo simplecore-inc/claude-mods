@@ -2,6 +2,21 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.7.3 (2026-11-14)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Works with Orca 1.4.257 and 1.4.258, whose account list names each account's config folder as `home` and Claude Code's own as `systemDefaultHome`: such an Orca is taken as keeping no login of this machine's Claude Code even where every account is signed in and `~/.claude` holds no login, so a switch is made here alone and nothing is selected in Orca.
+- In a session the Claude desktop app runs with its own account, no account is switched: the cards show no **Switch**, a line above them says the login is switched from a terminal session, and `/sc:accounts use` answers the same. A switch made there changed the login of the terminal sessions and left that session's account as it was.
+- In the desktop app the status band's context gauge and lines changed draw on the app's own ground instead of a dark block.
+
+### Toolbox (`sc-toolbox`) and Workspace (`sc-workspace`)
+
+- A press on the status band's toolbox, place or lines changed cell opens the mod's pane: the hook names `sc-accounts`, the plugin that draws the band, in its matcher, as a hook with no matcher hears its own plugin's presses only.
+
 ## 0.7.2 (2026-10-20)
 
 > [!IMPORTANT]

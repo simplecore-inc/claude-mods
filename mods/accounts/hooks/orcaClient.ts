@@ -158,7 +158,7 @@ export async function isOrcaCheckDue(io: Io): Promise<boolean> {
   return typeof kept?.checkedAt !== 'number' || (await io.now()) - kept.checkedAt >= ORCA_RECHECK_MS
 }
 
-/** Selects a Claude account in Orca, which then writes it into Claude Code's login itself. */
+/** Selects a Claude account in Orca: up to 1.4.223 Orca then writes it into Claude Code's login itself. A later Orca keeps no login here, and no switch reaches this. */
 export async function orcaSelect(io: Io, m: Messages, accountId: string): Promise<void> {
   const answer = await orcaRequest(io, m, 'accounts.selectClaude', { accountId }, ORCA_SELECT_SECONDS)
   if (answer.kind === 'ok') return

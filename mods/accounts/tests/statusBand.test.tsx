@@ -27,7 +27,7 @@ test('a remote surface wraps the band itself, under no rule; the terminal packs 
   const flow = await desktop.find({ key: 'status-row-0' })
   expect(flow?.props).toMatchObject({ flexWrap: 'wrap' })
   expect(flow?.children?.length).toBeGreaterThan(3)
-  for (const child of flow?.children ?? []) expect(child.props).toMatchObject({ flexShrink: 0 })
+  for (const child of (flow?.children ?? []) as { props: unknown }[]) expect(child.props).toMatchObject({ flexShrink: 0 })
   expect(await desktop.find({ key: 'status-row-1' })).toBeUndefined()
   await desktop.unmount()
 
@@ -128,8 +128,8 @@ test('with the status line command\'s forward, the band shows its line above the
     expect(await ui.find({ key: 'status-row-0' })).toBeDefined()
     expect(await ui.find({ key: 'status-row-1' })).toBeUndefined()
     // The context is a gauge like the usage bars: a label, thin bar cells, the percentage.
-    // Rounded off by half blocks on the cell grid, by spaces of its ground elsewhere.
-    expect(await ui.find({ type: 'Text', text: surface === 'terminal' ? '▐ctx ━━━━━━ 50%▌' : ' ctx ━━━━━━ 50% ' })).toBeDefined()
+    // Rounded off by half blocks on the cell grid; elsewhere it stands on the surface's own ground.
+    expect(await ui.find({ type: 'Text', text: surface === 'terminal' ? '▐ctx ━━━━━━ 50%▌' : 'ctx ━━━━━━ 50%' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' 50%' })).toBeDefined()
     // The place sits at the end, right before the lines changed.
     expect(row.indexOf('45%')).toBeGreaterThan(-1)
@@ -173,11 +173,34 @@ test('off the cell grid the place, the lines and the toolbox are one Button each
   const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 200 } as never
   const ui = await $.ui.mount({ plugin: 'sc-accounts', surface: 'desktop', component: 'AbovePrompt', props })
   expect((await ui.find({ key: 'band-place' }))?.text).toBe(' claude-mods ◇ main  #12✔')
-  expect((await ui.find({ key: 'band-lines' }))?.text).toBe(' +3 -1 ')
+  // The lines changed have no ground of their own there: the surface's Button frames them.
+  expect((await ui.find({ key: 'band-lines' }))?.text).toBe('+3 -1')
   expect((await ui.find({ key: 'band-toolbox' }))?.text).toBe(' ⚒ Toolbox ')
   expect(await ui.find({ type: 'Text', text: /[▐▌]/ })).toBeUndefined()
   expect((await ui.find({ key: 'status-cell-model' }))?.text).toMatch(/^ Opus5\.5 .* $/)
   await ui.unmount()
+})
+
+test('off the cell grid the context gauge and the lines changed draw on the surface\'s own ground, no dark fill behind them', async ($, on) => {
+  seedState(on, { status: STATUS })
+  const desktop = await $.ui.mount({ plugin: 'sc-accounts', surface: 'desktop', component: 'AbovePrompt', props: bandProps(200) })
+  // The terminal's neutral ground is a fixed dark grey: on a page that is not the terminal's it reads as a black box.
+  const filled = (await desktop.findAll({ type: 'Text' })).filter(found => found.props.backgroundColor === '#303030')
+  expect(filled.map(found => found.text)).toEqual([])
+  const context = await desktop.find({ key: 'status-cell-context' })
+  expect(context?.text).toMatch(/^ctx ━{6} \d+%$/)
+  // Its label and track follow the surface's dim text, as the usage windows' do; no grey picked for a dark ground.
+  const inContext = async (text: string | RegExp) => (await desktop.findAll({ type: 'Text', text })).find(found => found.props.dimColor !== undefined || found.props.color !== undefined)?.props
+  expect(await inContext('ctx ')).toEqual({ dimColor: true })
+  expect((await desktop.find({ key: 'band-lines' }))?.text).toBe('+3 -1')
+  await desktop.unmount()
+
+  // The terminal keeps the block: the gauge on its ground between half blocks.
+  const terminal = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: bandProps(200) })
+  const ground = (await terminal.findAll({ type: 'Text' })).filter(found => found.props.backgroundColor === '#303030').map(found => found.text)
+  expect(ground).toContain('ctx ')
+  expect(ground).toContain('+3')
+  await terminal.unmount()
 })
 
 test('the account\'s Button opens the pane, the stale mark beside the name inside it', async ($, on) => {

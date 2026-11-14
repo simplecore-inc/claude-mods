@@ -1,5 +1,5 @@
 import type { UsageView } from '../types'
-import { USAGE_KEY, changeIndex, exclusive, noteInstalled, oauthAccountKey, organizationOf, recordChange, syncLive } from './accounts'
+import { USAGE_KEY, changeIndex, exclusive, hostAccount, noteInstalled, oauthAccountKey, organizationOf, recordChange, syncLive } from './accounts'
 import type { AccountsContext } from './accounts'
 import { lookedUpOnly } from './anthropic'
 import { REFRESH_TIMEOUT_MS, deleteVault, ensureFresh, liveOauthAccount, readLiveCredential, readVault, withLiveSharedFields, writeLiveFile, writeLiveKeychain, writeLiveOauthAccount } from './credentials'
@@ -16,10 +16,17 @@ import { dropPending, keepPending, orcaClaude, orcaSelect, rememberedOrca } from
  * uses, Orca's with it, and removing an account.
  */
 
-/** Makes a saved account the one Claude Code logs in with, and Orca's too when Orca keeps the Claude logins here. */
+/**
+ * Makes a saved account the one Claude Code logs in with, and Orca's too when
+ * Orca keeps the Claude logins here. Refused where a host signs this session
+ * in with its own account (`hostAccount`): the switch would leave this
+ * session's account as it is and change the login of sessions the person
+ * does not see from here.
+ */
 export async function switchTo(ctx: AccountsContext, uuid: string, via: 'dialog' | 'command'): Promise<string> {
   const { io } = ctx
   const m = ctx.messages()
+  if ((await hostAccount(io)) !== null) throw new Error(m.hostNoSwitch)
   const target = (await ctx.accounts.get()).find(one => one.uuid === uuid)
   if (!target) throw new Error('no saved account with that id')
   const details = (await io.store.get(oauthAccountKey(uuid))) as OauthAccount | undefined

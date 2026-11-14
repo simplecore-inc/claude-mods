@@ -1189,8 +1189,8 @@ export const register: Register = (on, options) => {
 
   // The accounts band's place or lines changed, pressed: toggled here, inside the person's
   // press, so the pane counts as asked for and is placed at any width.
-  on('ui.press', async ($, e, next) => {
-    if (e.plugin !== BAND.plugin || e.component !== 'AbovePrompt' || !BAND.cells.includes(e.element)) return next(e)
+  // The matcher names the accounts mod: a hook with none hears its own plugin's presses only.
+  on('ui.press', { plugin: BAND.plugin, component: 'AbovePrompt', element: BAND.cells }, async ($, e) => {
     await togglePane($, 'diff')
 
     return { element: e.element }

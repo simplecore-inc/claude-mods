@@ -1,6 +1,6 @@
 // Adapted from the codex plugin of alex2481kobe/claude-mods (Apache License 2.0); see THIRD_PARTY_NOTICES.md.
 
-import type { Hook, TurnStepChunk, TurnUsage } from 'claude-code'
+import type { Hook, TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
 
 import type { CodexOpenings, CodexOptions, CodexRun, CodexRuns, CodexSent } from '../../types'
 import { TYPES } from './agents'
@@ -138,7 +138,8 @@ export async function isCodexAgent(ctx: CodexContext, agentId: string | undefine
   return agentId !== undefined && TYPES[(await ctx.agentType(agentId)) ?? ''] !== undefined
 }
 
-export async function* step(ctx: CodexContext, e: StepInput, next: StepNext) {
+// Typed as the engine's stream is, so each chunk's `kind` is checked against the kinds the engine takes.
+export async function* step(ctx: CodexContext, e: StepInput, next: StepNext): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const agentId = e.agentId
   if (!agentId) return yield* next(e)
   const type = TYPES[(await ctx.agentType(agentId)) ?? '']

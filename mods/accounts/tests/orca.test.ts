@@ -186,3 +186,26 @@ test('Orca 1.4.230 runs each account in a folder of its own and writes no login 
   // So a switch is made here alone, and no copy of Orca's is refreshed or selected.
   expect(planSwitch({ kind: 'ok', claude: claude! }, null, 'jun@example.org', 'org-jun')).toEqual({ kind: 'direct' })
 })
+
+test('Orca 1.4.257 names each account\'s config folder: with every account signed in and no login in Claude Code\'s own folder, it still keeps none of this machine\'s', () => {
+  // `accounts.list` as Orca 1.4.257 answers it where `~/.claude` holds no login: no `systemDefaultEmail`,
+  // and an account signed in in its own folder carries neither `needsSignIn` nor `runsOnSystemDefault`.
+  const result = {
+    claude: {
+      accounts: [
+        { id: 'o-mina', email: 'mina@example.com', managedAuthRuntime: 'host', organizationUuid: 'org-mina', home: '/data/orca/claude-profiles/o-mina/home' },
+        { id: 'o-jun', email: 'jun@example.org', managedAuthRuntime: 'host', organizationUuid: 'org-jun', home: '/data/orca/claude-profiles/o-jun/home' },
+      ],
+      activeAccountId: 'o-mina',
+      activeAccountIdsByRuntime: { host: 'o-mina', wsl: {} },
+      systemDefaultHome: '/home/mina/.claude',
+    },
+  }
+  const claude = parseOrcaClaude(result)
+  expect(claude).toEqual({ accounts: [], activeId: null })
+  expect(planSwitch({ kind: 'ok', claude: claude! }, null, 'jun@example.org', 'org-jun')).toEqual({ kind: 'direct' })
+  // The folder alone says so, as does the system default's alone.
+  const { systemDefaultHome: _home, ...withoutDefault } = result.claude
+  expect(parseOrcaClaude({ claude: withoutDefault })).toEqual({ accounts: [], activeId: null })
+  expect(parseOrcaClaude({ claude: { ...result.claude, accounts: result.claude.accounts.map(({ home: _folder, ...rest }) => rest) } })).toEqual({ accounts: [], activeId: null })
+})

@@ -192,3 +192,35 @@ test('the Add tab reads pnpm\'s workspace packages, and names a package.json it 
   expect(await ui.find({ type: 'Text', text: /Could not read package\.json/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('pressing the accounts band\'s toolbox cell opens the quick tiles, inside the press', {
+  plugins: [
+    {
+      name: 'sc-accounts',
+      // Stands for the accounts mod: its band, the toolbox cell one Button.
+      register: on => {
+        on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+          const { Box, Button } = $.ui.resolve(e)
+          return (
+            <Box>
+              <Button key="band-toolbox" label="Toolbox" plain onPress={() => undefined} />
+            </Box>
+          )
+        })
+      },
+    },
+  ],
+}, async ($, on) => {
+  seedState(on, {})
+  on('ui.panes', () => ({ value: [] as never }))
+  on('state.set', () => ({ value: { isSet: true, version: 2 } as never }))
+  const opened: string[] = []
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } as never }
+  })
+  const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120 } as never })
+  expect(await band.press({ key: 'band-toolbox' })).toEqual({ element: 'band-toolbox' })
+  expect(opened).toEqual(['sc-toolbox'])
+  await band.unmount()
+})

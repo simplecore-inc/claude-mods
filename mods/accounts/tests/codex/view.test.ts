@@ -4,13 +4,13 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo, CommandDescribeInput, On } from 'claude-code'
 
 import { HINT } from '../../hooks/codex/commands'
-import { codexMachine, settle } from './fake'
+import { codexMachine, engineBand, settle } from './fake'
 
 const AGENTS: AgentInfo[] = [
   { id: 'c1', type: 'sc-accounts:codex-read', description: 'Review', status: 'completed' },
   { id: 'g1', type: 'general-purpose', description: 'Search', status: 'running' },
 ]
-const BAND = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
+const BAND = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
 const STATUS: CommandDescribeInput = { command: 'status', description: 'Show status', isHidden: false, immediate: false, provider: { plugin: 'engine', tier: 'core' } }
 const CODEX_STATUS: CommandDescribeInput = { ...STATUS, command: 'codex-status', provider: { plugin: 'sc-accounts', tier: 'user' } }
 const PRESENTATION = { isFullscreen: false, columns: 150 }
@@ -24,7 +24,7 @@ function beneath(on: On): { tail: () => string | undefined } {
     tail = e.props.tail
     return { type: 'Text', props: {}, children: [e.props.hint] } as never
   })
-  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+  engineBand(on, { hasEnv: false })
   on('command.describe', (_$, e) => ({ description: e.description, isHidden: e.isHidden }))
   return { tail: () => tail }
 }

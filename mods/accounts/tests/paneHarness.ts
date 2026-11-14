@@ -24,7 +24,7 @@ export const STATUS = {
   linesAdded: 3,
   linesRemoved: 1,
 }
-export const bandProps = (bodyColumns: number) => ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns }) as never
+export const bandProps = (bodyColumns: number) => ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns }) as never
 
 /** Stands in for the engine's state store beneath the plugin, seeded with two accounts. */
 export function seedState(on: On, extra: Record<string, unknown>, now?: number): void {

@@ -90,19 +90,25 @@ export function parseOrcaFrame(text: string, id: string): OrcaFrame | null {
   return null
 }
 
+/** What an `accounts.list` answer holds only where Orca runs each account in a config folder of its own. */
+const FOLDER_ROUTING_FIELDS = ['systemDefaultEmail', 'systemDefaultHome']
+const FOLDER_ROUTED_ACCOUNT_FIELDS = ['needsSignIn', 'runsOnSystemDefault', 'home']
+
 /**
  * The Claude part of what `accounts.list` answers, or null when it holds none.
  * From 1.4.230 Orca runs each account in a Claude config folder of its own and
- * writes no login into Claude Code's: its answer says so (`systemDefaultEmail`,
- * an account's `needsSignIn` or `runsOnSystemDefault`), and it then keeps no
- * login of this machine's Claude Code, as when no account is selected.
+ * writes no login into Claude Code's: its answer says so (`systemDefaultEmail`
+ * where Claude Code's own folder holds a login, `systemDefaultHome`, an
+ * account's `needsSignIn`, `runsOnSystemDefault` or, from 1.4.257, its `home`),
+ * and it then keeps no login of this machine's Claude Code, as when no account
+ * is selected.
  */
 export function parseOrcaClaude(result: unknown): OrcaClaude | null {
   const claude = (result as { claude?: { accounts?: unknown; activeAccountId?: unknown; activeAccountIdsByRuntime?: { host?: unknown } } } | null)?.claude
   if (!claude || !Array.isArray(claude.accounts)) return null
   const routesByFolder =
-    Object.hasOwn(claude, 'systemDefaultEmail') ||
-    (claude.accounts as Record<string, unknown>[]).some(account => typeof account === 'object' && account !== null && ('needsSignIn' in account || 'runsOnSystemDefault' in account))
+    FOLDER_ROUTING_FIELDS.some(field => Object.hasOwn(claude, field)) ||
+    (claude.accounts as unknown[]).some(account => typeof account === 'object' && account !== null && FOLDER_ROUTED_ACCOUNT_FIELDS.some(field => field in account))
   if (routesByFolder) return { accounts: [], activeId: null }
   const accounts = (claude.accounts as { id?: unknown; email?: unknown; organizationUuid?: unknown; managedAuthRuntime?: unknown }[])
     // A login Orca keeps in a WSL distribution is written there, not into this machine's Claude Code.

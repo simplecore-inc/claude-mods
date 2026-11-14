@@ -55,6 +55,8 @@ const PANE = 'sc-toolbox'
 /** The accounts band's toolbox cell: a row of Buttons, `band-toolbox` then `band-toolbox-1` and on. */
 const BAND_PLUGIN = 'sc-accounts'
 const BAND_CELL = 'band-toolbox'
+/** The cell's key, alone or with a suffix after a hyphen. */
+const BAND_CELLS = new RegExp(`^${BAND_CELL}(-|$)`)
 const COMMAND = 'sc:toolbox'
 const TAB_LABEL = 'Toolbox'
 /** The mod's name in the pane's header; a name, so it is never translated. */
@@ -633,8 +635,8 @@ export const register: Register = on => {
 
   // The accounts band's toolbox cell, pressed: the quick tiles open inside the person's press,
   // so the pane counts as asked for and is placed at any width; pressed again, they close.
-  on('ui.press', async ($, e, next) => {
-    if (e.plugin !== BAND_PLUGIN || e.component !== 'AbovePrompt' || !(e.element === BAND_CELL || e.element?.startsWith(`${BAND_CELL}-`))) return next(e)
+  // The matcher names the accounts mod: a hook with none hears its own plugin's presses only.
+  on('ui.press', { plugin: BAND_PLUGIN, component: 'AbovePrompt', element: BAND_CELLS }, async ($, e) => {
     const pane = (await $.ui.panes()).find(one => one.id === PANE)
     if (pane?.isShown && pane.isPlaced && quick) await closePane($)
     else {
