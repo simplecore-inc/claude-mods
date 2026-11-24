@@ -4,11 +4,11 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { AgentInfo, CommandDescribeInput, On } from 'claude-code'
 
 import { HINT } from '../../hooks/codex/commands'
-import { codexMachine, engineBand, settle } from './fake'
+import { agentInfo, codexMachine, engineBand, settle } from './fake'
 
 const AGENTS: AgentInfo[] = [
-  { id: 'c1', type: 'sc-accounts:codex-read', description: 'Review', status: 'completed' },
-  { id: 'g1', type: 'general-purpose', description: 'Search', status: 'running' },
+  agentInfo({ id: 'c1', type: 'sc-accounts:codex-read', description: 'Review', status: 'completed' }),
+  agentInfo({ id: 'g1', type: 'general-purpose', description: 'Search', status: 'running' }),
 ]
 const BAND = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
 const STATUS: CommandDescribeInput = { command: 'status', description: 'Show status', isHidden: false, immediate: false, provider: { plugin: 'engine', tier: 'core' } }

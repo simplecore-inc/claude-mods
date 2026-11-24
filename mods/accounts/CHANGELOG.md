@@ -4,6 +4,16 @@
 
 Every plugin in this repository shares one version, kept in `VERSION`. `scripts/sync.mjs` writes it into each plugin's manifest and copies this file into each plugin, where the pane header reads the release date from the heading of its version: `## <version> (<YYYY-MM-DD>)`.
 
+## 0.7.4 (2026-11-24)
+
+> [!IMPORTANT]
+> After updating, run `/reload-plugins` in every open Claude Code window.
+
+### Accounts (`sc-accounts`)
+
+- Checked with Orca 1.4.265: its account list, which may now name an account's `displayName`, still reads as an Orca that keeps no login of this machine's Claude Code, so a switch is made here alone and nothing is selected in Orca. A switch of the machine's login with Orca running was left as made.
+- The OAuth client id and the `anthropic-beta` value in `hooks/anthropic.ts` are marked as Claude Code's own public values, the same in every installation ([#1](https://github.com/simplecore-inc/claude-mods/issues/1)).
+
 ## 0.7.3 (2026-11-14)
 
 > [!IMPORTANT]

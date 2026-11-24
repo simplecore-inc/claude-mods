@@ -12,7 +12,7 @@ import { step as codexStep, type CodexContext, type Shared } from '../../hooks/c
 import { refresh } from '../../hooks/paneControl'
 import { messagesFor } from '../../hooks/i18n'
 import { fakeMachine } from '../machine'
-import { codex, engine, engineBand, REMINDER, step, TASK, THREAD } from './fake'
+import { agentInfo, codex, engine, engineBand, REMINDER, step, TASK, THREAD } from './fake'
 
 // How a codex agent's step and its Codex server end, and what they leave
 // behind: a stop while Codex starts, a server that has gone, a write that
@@ -176,7 +176,7 @@ describe('what the pane and the band no longer wait on', () => {
   const BAND = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 150, scroll: { offset: 0, bodyRows: 10 } }
 
   test('a codex reply shows in the band of the surface whose view it was run in, not in another surface\'s', async ($, on) => {
-    const agents: AgentInfo[] = [{ id: 'c5', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' }]
+    const agents = [agentInfo({ id: 'c5', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' })]
     on('agent.list', () => ({ value: agents }))
     engineBand(on, { hasEnv: false })
     on('state.get', () => ({ value: { value: undefined, version: 1 } as never }))

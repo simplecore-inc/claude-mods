@@ -1,14 +1,14 @@
 // Adapted from the codex plugin of alex2481kobe/claude-mods (Apache License 2.0); see THIRD_PARTY_NOTICES.md.
 
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { AgentInfo, CommandDescribeInput } from 'claude-code'
+import type { CommandDescribeInput } from 'claude-code'
 
 import { agentLabel } from '../../hooks/agentModels'
 import { HINT } from '../../hooks/codex/commands'
 import { commandOf } from '../../hooks/codex/events'
 import { flagsOf } from '../../hooks/codex/flags'
 import { openView, setOpenView } from '../../hooks/codex/view'
-import { codexMachine, engineBand } from './fake'
+import { agentInfo, codexMachine, engineBand } from './fake'
 
 // How the codex agents sit beside the accounts and other plugins: views per
 // surface, commands named exactly, a /clear, and the agent list asked once.
@@ -39,7 +39,7 @@ describe('commands', () => {
   })
 
   test('in a codex agent\'s view the footer keeps a hint another plugin put there and adds the codex commands', async ($, on) => {
-    const agents: AgentInfo[] = [{ id: 'c9', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' }]
+    const agents = [agentInfo({ id: 'c9', type: 'sc-accounts:codex-read', description: 'Review', status: 'running' })]
     on('agent.list', () => ({ value: agents }))
     let tail: string | undefined
     engineBand(on, { hasEnv: false })
@@ -59,7 +59,7 @@ test('the band asks the engine for an agent\'s type once, however often it draws
   let asked = 0
   on('agent.list', () => {
     asked += 1
-    return { value: [{ id: 'g7', type: 'general-purpose', description: 'Search', status: 'running' }] as AgentInfo[] }
+    return { value: [agentInfo({ id: 'g7', type: 'general-purpose', description: 'Search', status: 'running' })] }
   })
   engineBand(on, { hasEnv: false })
   const band = await $.ui.mount({ plugin: 'sc-accounts', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND, view: { agentId: 'g7' } } as never })

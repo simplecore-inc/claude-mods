@@ -142,10 +142,25 @@ export function codex(on: On, mode: Mode = 'ok'): Fake {
   return fake
 }
 
+/** One subagent as `$.agent.list()` answers it: what a test names, and the engine's other fields at rest. */
+export function agentInfo(named: Pick<AgentInfo, 'id' | 'type' | 'description' | 'status'> & Partial<AgentInfo>): AgentInfo {
+  return {
+    kind: 'local_agent',
+    taskStatus: named.status === 'completed' ? 'completed' : 'running',
+    label: named.description,
+    startTime: 0,
+    cwd: '/work',
+    tokenCount: 0,
+    tokenSamples: [],
+    hasRow: true,
+    ...named,
+  }
+}
+
 // The rest of the engine one codex agent's step reads.
 export function engine(on: On, turns: ApiTurn[]) {
   mock.env(on, { HOME: '/home/me' })
-  const agent: AgentInfo = { id: 'a1', type: 'sc-accounts:codex-run', description: 'Write note', status: 'running', name: 'writer' }
+  const agent = agentInfo({ id: 'a1', type: 'sc-accounts:codex-run', description: 'Write note', status: 'running', name: 'writer' })
   on('agent.list', () => ({ value: [agent] }))
   on('session.messages', () => ({ value: turns as never }))
   on('session.cwd', () => ({ value: '/work' }))

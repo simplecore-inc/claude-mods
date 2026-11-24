@@ -8,6 +8,8 @@ import type { Credential } from './keychain'
 export const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 export const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 export const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
+// Claude Code's own public values, the same in every installation: the id of its OAuth client,
+// sent with no client secret, and the `anthropic-beta` header its OAuth requests carry.
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const OAUTH_BETA = 'oauth-2025-04-20'
 /** Refresh this long before the access token expires. */
